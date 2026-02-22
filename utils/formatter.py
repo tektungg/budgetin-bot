@@ -13,23 +13,23 @@ MONTH_NAMES = {
 
 
 def tx_confirmation_message(tx: dict) -> str:
-    """Pesan konfirmasi setelah transaksi dicatat"""
-    emoji = "💸" if tx["type"] == "keluar" else "💰"
-    tipe = "Pengeluaran" if tx["type"] == "keluar" else "Pemasukan"
+    """Pesan konfirmasi setelah transaksi dicatat — layout bersih"""
+    is_keluar = tx["type"] == "keluar"
+    emoji = "💸" if is_keluar else "💰"
+    tipe = "Pengeluaran" if is_keluar else "Pemasukan"
     amount_str = format_rupiah(tx["amount"])
 
     return (
-        f"{emoji} <b>{tipe} dicatat!</b>\n\n"
-        f"📌 <b>{tx['description']}</b>\n"
-        f"💵 {amount_str}\n"
-        f"🗂️ {tx.get('category', 'Lainnya')}\n"
-        f"🔖 ID: <code>#{tx['id']}</code>\n\n"
-        f"<i>Ketik /hapus {tx['id']} untuk membatalkan</i>"
+        f"{emoji} <b>{tipe} Dicatat!</b>\n\n"
+        f"┌ 📌 {tx['description']}\n"
+        f"├ 💵 {amount_str}\n"
+        f"├ 🗂️ {tx.get('category', 'Lainnya')}\n"
+        f"└ 🔖 <code>#{tx['id']}</code>"
     )
 
 
 def build_transaction_list(transactions: list[dict], limit: int = None) -> str:
-    """Bangun daftar transaksi untuk ditampilkan"""
+    """Bangun daftar transaksi untuk ditampilkan — grouped by date"""
     if limit:
         display = transactions[:limit]
     else:
@@ -44,15 +44,27 @@ def build_transaction_list(transactions: list[dict], limit: int = None) -> str:
             tx_date = tx["created_at"]
             if hasattr(tx_date, "date"):
                 date_str = tx_date.strftime("%d %b")
-                if date_str != current_date:
-                    current_date = date_str
-                    lines.append(f"\n<b>📅 {date_str}</b>")
+            elif isinstance(tx_date, str):
+                # Parse ISO string dari Supabase
+                try:
+                    dt = datetime.fromisoformat(tx_date.replace("Z", "+00:00"))
+                    date_str = dt.strftime("%d %b")
+                except (ValueError, AttributeError):
+                    date_str = None
+            else:
+                date_str = None
+
+            if date_str and date_str != current_date:
+                current_date = date_str
+                if lines:
+                    lines.append("")  # spacing antar tanggal
+                lines.append(f"<b>📅 {date_str}</b>")
 
         emoji = "💸" if tx["type"] == "keluar" else "💰"
         amount_str = format_rupiah(tx["amount"])
-        desc = tx.get("description", "")[:40]  # truncate panjang
+        desc = tx.get("description", "")[:35]
         tx_id = tx.get("id", "")
 
-        lines.append(f"{emoji} {desc} — <b>{amount_str}</b> <i>[#{tx_id}]</i>")
+        lines.append(f"  {emoji} {desc} — <b>{amount_str}</b>  <i>[#{tx_id}]</i>")
 
     return "\n".join(lines)

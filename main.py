@@ -7,6 +7,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 from config.settings import settings
@@ -17,7 +18,7 @@ from handlers.report import (
     cmd_kategori,
     cmd_export,
 )
-from handlers.general import cmd_start, cmd_help, cmd_hapus, cmd_edit
+from handlers.general import cmd_start, cmd_help, cmd_hapus, cmd_edit, handle_callback
 from services.database import check_connection
 
 logging.basicConfig(
@@ -48,12 +49,15 @@ def main():
     app.add_handler(CommandHandler("hapus", cmd_hapus))
     app.add_handler(CommandHandler("edit", cmd_edit))
 
+    # Callback handler (inline keyboard)
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
     # Message handlers
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("Bot started, polling...")
-    app.run_polling(allowed_updates=["message"])
+    app.run_polling(allowed_updates=["message", "callback_query"])
 
 
 if __name__ == "__main__":

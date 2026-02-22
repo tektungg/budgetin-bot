@@ -1,5 +1,6 @@
 """
 Handler untuk input transaksi (teks dan foto struk)
+Dengan konfirmasi yang lebih rapi & inline keyboard.
 """
 
 import logging
@@ -10,6 +11,7 @@ from services.database import insert_transaction
 from services.gemini import analyze_receipt
 from utils.auth import require_auth
 from utils.formatter import tx_confirmation_message
+from handlers.general import after_tx_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +25,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = parse_transaction(text)
 
     if not result:
-        # Bukan format transaksi yang dikenali
         await update.message.reply_text(
-            "❓ Format tidak dikenali.\n\n"
+            "❓ <b>Format tidak dikenali</b>\n\n"
             "Contoh yang bisa kamu kirim:\n"
-            "• <code>keluar makan siang 25k</code>\n"
-            "• <code>masuk gaji 3jt</code>\n"
-            "• <code>keluar grab 15000</code>\n"
-            "• <code>masuk freelance desain 500rb</code>\n\n"
-            "Atau kirim <b>foto struk</b> untuk dicatat otomatis.\n"
-            "Ketik /help untuk bantuan lengkap.",
+            "┌ <code>keluar makan siang 25k</code>\n"
+            "├ <code>masuk gaji 3jt</code>\n"
+            "├ <code>keluar grab 15000</code>\n"
+            "└ <code>masuk freelance desain 500rb</code>\n\n"
+            "📸 Atau kirim <b>foto struk</b> untuk dicatat otomatis.\n"
+            "❓ Ketik /help untuk bantuan lengkap.",
             parse_mode="HTML",
         )
         return
@@ -49,6 +50,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         tx_confirmation_message(tx),
         parse_mode="HTML",
+        reply_markup=after_tx_keyboard(tx["id"]),
     )
 
 
@@ -68,11 +70,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not transactions:
         await update.message.reply_text(
-            "❌ Gagal membaca struk. Pastikan:\n"
-            "• Foto cukup terang dan jelas\n"
-            "• Struk terlihat seluruhnya\n"
-            "• Bukan foto blur\n\n"
-            "Coba catat manual dengan format:\n"
+            "❌ <b>Gagal Membaca Struk</b>\n\n"
+            "Pastikan:\n"
+            "┌ 📷 Foto cukup terang dan jelas\n"
+            "├ 📄 Struk terlihat seluruhnya\n"
+            "└ 🔍 Bukan foto blur\n\n"
+            "💡 Coba catat manual:\n"
             "<code>keluar nama_toko jumlah</code>",
             parse_mode="HTML",
         )
@@ -92,13 +95,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(saved) == 1:
         await update.message.reply_text(
-            "✅ Struk berhasil dicatat!\n\n" + tx_confirmation_message(saved[0]),
+            "📸 <b>Struk Berhasil Dicatat!</b>\n\n"
+            + tx_confirmation_message(saved[0]),
             parse_mode="HTML",
+            reply_markup=after_tx_keyboard(saved[0]["id"]),
         )
     else:
-        lines = ["✅ Struk berhasil dicatat!\n"]
+        total = sum(tx["amount"] for tx in saved)
+        lines = [
+            "📸 <b>Struk Berhasil Dicatat!</b>\n",
+        ]
         for tx in saved:
             emoji = "💸" if tx["type"] == "keluar" else "💰"
             lines.append(f"{emoji} {tx['description']} — <b>{format_rupiah(tx['amount'])}</b>")
-        lines.append(f"\n📌 Total {len(saved)} transaksi dicatat.")
-        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+        lines.append(f"\n{'─' * 28}")
+        lines.append(f"📌 <b>{len(saved)} transaksi</b> • Total: <b>{format_rupiah(total)}</b>")
+
+        from handlers.general import main_menu_keyboard
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
+        )

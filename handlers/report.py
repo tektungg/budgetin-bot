@@ -1,10 +1,10 @@
 """
-Handler untuk laporan keuangan
+Handler untuk laporan keuangan — dengan layout bersih & inline keyboard
 """
 
 import logging
 from datetime import datetime
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from services.database import (
     get_today_transactions,
@@ -15,6 +15,7 @@ from services.sheets import export_to_sheets
 from services.parser import format_rupiah
 from utils.auth import require_auth
 from utils.formatter import build_transaction_list
+from handlers.general import report_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -31,35 +32,222 @@ def _summary_stats(transactions: list[dict]) -> tuple[int, int, int]:
     return total_masuk, total_keluar, total_masuk - total_keluar
 
 
-@require_auth
-async def cmd_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Laporan hari ini"""
-    user_id = update.effective_user.id
+def _build_summary_block(total_masuk: int, total_keluar: int, saldo: int) -> str:
+    """Block ringkasan keuangan yang konsisten"""
+    saldo_emoji = "📈" if saldo >= 0 else "📉"
+    saldo_label = "Surplus" if saldo >= 0 else "Defisit"
+    return (
+        f"┌ 💰 Pemasukan   <b>{format_rupiah(total_masuk)}</b>\n"
+        f"├ 💸 Pengeluaran <b>{format_rupiah(total_keluar)}</b>\n"
+        f"└ {saldo_emoji} {saldo_label}      <b>{format_rupiah(abs(saldo))}</b>"
+    )
+
+
+# ── Shared logic (dipanggil dari command & callback) ───
+
+async def _send_hari_ini(message, user_id: int, edit: bool = False):
+    """Logic laporan hari ini — reusable dari command & callback"""
     txs = get_today_transactions(user_id)
 
     now = datetime.now()
-    title = f"📊 Laporan Hari Ini — {now.strftime('%d %B %Y')}"
+    date_str = now.strftime("%d %B %Y")
 
     if not txs:
-        await update.message.reply_text(f"{title}\n\nBelum ada transaksi hari ini.")
+        text = (
+            f"📊 <b>Laporan Hari Ini</b>\n"
+            f"📅 {date_str}\n\n"
+            f"<i>Belum ada transaksi hari ini.</i>\n\n"
+            f"💡 Ketik transaksi untuk mulai mencatat!"
+        )
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        else:
+            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
         return
 
     total_masuk, total_keluar, saldo = _summary_stats(txs)
 
-    lines = [f"<b>{title}</b>\n"]
-    lines.append(build_transaction_list(txs))
-    lines.append(f"\n{'─' * 28}")
-    lines.append(f"💰 Pemasukan  : <b>{format_rupiah(total_masuk)}</b>")
-    lines.append(f"💸 Pengeluaran: <b>{format_rupiah(total_keluar)}</b>")
-    saldo_emoji = "✅" if saldo >= 0 else "⚠️"
-    lines.append(f"{saldo_emoji} Saldo       : <b>{format_rupiah(saldo)}</b>")
+    lines = [
+        f"📊 <b>Laporan Hari Ini</b>",
+        f"📅 {date_str}  •  {len(txs)} transaksi\n",
+        _build_summary_block(total_masuk, total_keluar, saldo),
+        f"\n{'─' * 30}\n",
+        build_transaction_list(txs),
+    ]
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    text = "\n".join(lines)
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+
+
+async def _send_bulan_ini(
+    message, user_id: int, year: int = None, month: int = None, edit: bool = False
+):
+    """Logic laporan bulanan — reusable"""
+    now = datetime.now()
+    year = year or now.year
+    month = month or now.month
+
+    txs = get_month_transactions(user_id, year, month)
+    month_name = MONTH_NAMES.get(month, str(month))
+
+    if not txs:
+        text = (
+            f"📅 <b>Laporan {month_name} {year}</b>\n\n"
+            f"<i>Belum ada transaksi bulan ini.</i>"
+        )
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        else:
+            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        return
+
+    total_masuk, total_keluar, saldo = _summary_stats(txs)
+
+    lines = [
+        f"📅 <b>Laporan {month_name} {year}</b>",
+        f"📝 {len(txs)} transaksi tercatat\n",
+        _build_summary_block(total_masuk, total_keluar, saldo),
+        f"\n{'─' * 30}\n",
+        build_transaction_list(txs, limit=20),
+    ]
+
+    if len(txs) > 20:
+        lines.append(f"\n<i>... dan {len(txs) - 20} transaksi lainnya</i>")
+
+    text = "\n".join(lines)
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+
+
+async def _send_kategori(
+    message, user_id: int, year: int = None, month: int = None, edit: bool = False
+):
+    """Logic ringkasan kategori — reusable"""
+    now = datetime.now()
+    year = year or now.year
+    month = month or now.month
+
+    summary = get_category_summary(user_id, year, month)
+    month_name = MONTH_NAMES.get(month, str(month))
+
+    if not summary:
+        text = (
+            f"🗂️ <b>Kategori — {month_name} {year}</b>\n\n"
+            f"<i>Belum ada transaksi.</i>"
+        )
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        else:
+            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        return
+
+    keluar_rows = [r for r in summary if r["type"] == "keluar"]
+    masuk_rows = [r for r in summary if r["type"] == "masuk"]
+
+    lines = [
+        f"🗂️ <b>Kategori — {month_name} {year}</b>\n",
+    ]
+
+    if masuk_rows:
+        total_masuk = sum(r["total"] for r in masuk_rows)
+        lines.append(f"💰 <b>PEMASUKAN</b>  ({format_rupiah(total_masuk)})")
+        for row in masuk_rows:
+            lines.append(f"   ├ {row['category']}: <b>{format_rupiah(row['total'])}</b> ({row['count']}x)")
+        lines.append("")
+
+    if keluar_rows:
+        total_keluar = sum(r["total"] for r in keluar_rows)
+        lines.append(f"💸 <b>PENGELUARAN</b>  ({format_rupiah(total_keluar)})")
+        for i, row in enumerate(keluar_rows):
+            pct = int(row["total"] / total_keluar * 100) if total_keluar > 0 else 0
+            bar_len = max(1, pct // 10)
+            bar = "█" * bar_len + "░" * (10 - bar_len)
+            prefix = "└" if i == len(keluar_rows) - 1 else "├"
+            lines.append(
+                f"   {prefix} {row['category']}\n"
+                f"     {bar} <b>{format_rupiah(row['total'])}</b> ({pct}%)"
+            )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
+            InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
+        ],
+    ])
+
+    text = "\n".join(lines)
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _send_export(message, user_id: int, year: int = None, month: int = None, edit: bool = False):
+    """Logic export ke Google Sheets — reusable"""
+    now = datetime.now()
+    year = year or now.year
+    month = month or now.month
+
+    txs = get_month_transactions(user_id, year, month)
+    month_name = MONTH_NAMES.get(month, str(month))
+
+    if not txs:
+        text = f"📤 Tidak ada transaksi untuk {month_name} {year}."
+        if edit:
+            await message.edit_text(text, reply_markup=report_keyboard())
+        else:
+            await message.reply_text(text, reply_markup=report_keyboard())
+        return
+
+    # Kirim status loading
+    loading_text = f"⏳ Mengexport <b>{len(txs)}</b> transaksi ke Google Sheets..."
+    if edit:
+        await message.edit_text(loading_text, parse_mode="HTML")
+    else:
+        await message.reply_text(loading_text, parse_mode="HTML")
+
+    sheet_name = f"{month_name} {year}"
+    url = export_to_sheets(txs, sheet_name=sheet_name)
+
+    back_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+    ])
+
+    if url:
+        text = (
+            f"✅ <b>Export Berhasil!</b>\n\n"
+            f"📊 <b>{len(txs)}</b> transaksi — {month_name} {year}\n"
+            f"🔗 <a href='{url}'>Buka Google Sheets</a>"
+        )
+        await message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
+    else:
+        text = (
+            "❌ <b>Export Gagal</b>\n\n"
+            "Pastikan:\n"
+            "┌ GOOGLE_SHEET_ID sudah diisi di .env\n"
+            "└ Service account punya akses ke spreadsheet"
+        )
+        await message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
+
+
+# ── Command Handlers (entry point dari /command) ───────
+
+@require_auth
+async def cmd_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    await _send_hari_ini(update.message, user_id)
 
 
 @require_auth
 async def cmd_bulan_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Laporan bulan ini (atau bulan tertentu: /bulanini 1 2025)"""
     user_id = update.effective_user.id
     args = context.args
 
@@ -74,41 +262,17 @@ async def cmd_bulan_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 year = int(args[1])
         except ValueError:
             await update.message.reply_text(
-                "Format: /bulanini [bulan] [tahun]\nContoh: /bulanini 1 2025"
+                "⚠️ Format: <code>/bulanini [bulan] [tahun]</code>\n"
+                "Contoh: <code>/bulanini 1 2025</code>",
+                parse_mode="HTML",
             )
             return
 
-    txs = get_month_transactions(user_id, year, month)
-    month_name = MONTH_NAMES.get(month, str(month))
-    title = f"📊 Laporan {month_name} {year}"
-
-    if not txs:
-        await update.message.reply_text(f"{title}\n\nBelum ada transaksi bulan ini.")
-        return
-
-    total_masuk, total_keluar, saldo = _summary_stats(txs)
-
-    lines = [f"<b>{title}</b>"]
-    lines.append(f"Total {len(txs)} transaksi\n")
-    lines.append(build_transaction_list(txs, limit=20))
-
-    if len(txs) > 20:
-        lines.append(f"\n<i>... dan {len(txs) - 20} transaksi lainnya</i>")
-
-    lines.append(f"\n{'─' * 28}")
-    lines.append(f"💰 Pemasukan  : <b>{format_rupiah(total_masuk)}</b>")
-    lines.append(f"💸 Pengeluaran: <b>{format_rupiah(total_keluar)}</b>")
-    saldo_emoji = "✅" if saldo >= 0 else "⚠️"
-    lines.append(f"{saldo_emoji} Saldo       : <b>{format_rupiah(saldo)}</b>")
-    lines.append(f"\n💡 Gunakan /kategori untuk ringkasan per kategori")
-    lines.append(f"💡 Gunakan /export untuk export ke Google Sheets")
-
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await _send_bulan_ini(update.message, user_id, year, month)
 
 
 @require_auth
 async def cmd_kategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ringkasan per kategori bulan ini"""
     user_id = update.effective_user.id
     args = context.args
 
@@ -124,45 +288,11 @@ async def cmd_kategori(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    summary = get_category_summary(user_id, year, month)
-    month_name = MONTH_NAMES.get(month, str(month))
-    title = f"🗂️ Ringkasan Kategori — {month_name} {year}"
-
-    if not summary:
-        await update.message.reply_text(f"{title}\n\nBelum ada transaksi.")
-        return
-
-    keluar_rows = [r for r in summary if r["type"] == "keluar"]
-    masuk_rows = [r for r in summary if r["type"] == "masuk"]
-
-    lines = [f"<b>{title}</b>\n"]
-
-    if masuk_rows:
-        lines.append("💰 <b>PEMASUKAN</b>")
-        for row in masuk_rows:
-            lines.append(f"  {row['category']}: <b>{format_rupiah(row['total'])}</b> ({row['count']}x)")
-        total_masuk = sum(r["total"] for r in masuk_rows)
-        lines.append(f"  <i>Total: {format_rupiah(total_masuk)}</i>\n")
-
-    if keluar_rows:
-        lines.append("💸 <b>PENGELUARAN</b>")
-        for row in keluar_rows:
-            # Bar chart mini
-            pct = int(row["total"] / sum(r["total"] for r in keluar_rows) * 10)
-            bar = "█" * pct + "░" * (10 - pct)
-            lines.append(
-                f"  {row['category']}\n"
-                f"  {bar} <b>{format_rupiah(row['total'])}</b> ({row['count']}x)"
-            )
-        total_keluar = sum(r["total"] for r in keluar_rows)
-        lines.append(f"\n  <i>Total: {format_rupiah(total_keluar)}</i>")
-
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await _send_kategori(update.message, user_id, year, month)
 
 
 @require_auth
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Export ke Google Sheets"""
     user_id = update.effective_user.id
     args = context.args
 
@@ -178,27 +308,4 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    txs = get_month_transactions(user_id, year, month)
-    month_name = MONTH_NAMES.get(month, str(month))
-
-    if not txs:
-        await update.message.reply_text(f"Tidak ada transaksi untuk {month_name} {year}.")
-        return
-
-    await update.message.reply_text(f"⏳ Mengexport {len(txs)} transaksi ke Google Sheets...")
-
-    sheet_name = f"{month_name} {year}"
-    url = export_to_sheets(txs, sheet_name=sheet_name)
-
-    if url:
-        await update.message.reply_text(
-            f"✅ Export berhasil!\n\n"
-            f"📊 <b>{len(txs)} transaksi</b> {month_name} {year}\n"
-            f"🔗 <a href='{url}'>Buka Google Sheets</a>",
-            parse_mode="HTML",
-        )
-    else:
-        await update.message.reply_text(
-            "❌ Export gagal. Pastikan GOOGLE_SHEET_ID sudah diisi di .env "
-            "dan service account sudah diberi akses ke spreadsheet."
-        )
+    await _send_export(update.message, user_id, year, month)
