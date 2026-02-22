@@ -10,6 +10,7 @@ from services.database import (
     get_today_transactions,
     get_month_transactions,
     get_category_summary,
+    search_transactions,
 )
 from services.export import generate_excel, build_export_caption, MONTH_NAMES as EXPORT_MONTH_NAMES
 from services.parser import format_rupiah
@@ -298,3 +299,71 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     await _send_export(update.message, user_id, year, month)
+
+
+@require_auth
+async def cmd_cari(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler untuk /cari <keyword>"""
+    user_id = update.effective_user.id
+    args = context.args
+
+    if not args:
+        await update.message.reply_text(
+            "🔍 <b>Cara pakai:</b>\n\n"
+            "<code>/cari makan</code>\n"
+            "<code>/cari grab</code>\n"
+            "<code>/cari gaji</code>\n\n"
+            "<i>Cari di deskripsi dan kategori transaksi.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    keyword = " ".join(args)
+    await _send_search(update.message, user_id, keyword)
+
+
+async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
+    """Logic pencarian transaksi — reusable dari command & callback"""
+    txs = search_transactions(user_id, keyword)
+
+    if not txs:
+        text = (
+            f"🔍 <b>Hasil Pencarian</b>\n\n"
+            f"Keyword: <code>{keyword}</code>\n\n"
+            f"<i>Tidak ditemukan transaksi yang cocok.</i>"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+        ])
+        if edit:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    total_masuk, total_keluar, saldo = _summary_stats(txs)
+
+    lines = [
+        f"🔍 <b>Hasil Pencarian</b>",
+        f"Keyword: <code>{keyword}</code>  •  {len(txs)} ditemukan\n",
+        _build_summary_block(total_masuk, total_keluar, saldo),
+        f"\n{'─' * 30}\n",
+        build_transaction_list(txs),
+    ]
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
+            InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
+        ],
+    ])
+
+    text = "\n".join(lines)
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+

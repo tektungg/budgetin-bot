@@ -122,7 +122,12 @@ HELP_TEXT = """
 ├ /bulanini — ringkasan bulan ini
 ├ /bulanini <code>1 2025</code> — bulan tertentu
 ├ /kategori — ringkasan per kategori
-└ /export — export ke file CSV
+├ /export — export bulan ini ke Excel
+└ /export <code>1 2025</code> — export bulan tertentu
+
+<b>🔍 PENCARIAN</b>
+┌ <code>/cari makan</code> — cari di deskripsi
+└ <code>/cari Transportasi</code> — cari di kategori
 """
 
 

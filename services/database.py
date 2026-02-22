@@ -162,3 +162,19 @@ def get_transaction_by_id(tx_id: int, user_id: int) -> dict | None:
         .execute()
     )
     return result.data
+
+
+def search_transactions(user_id: int, keyword: str, limit: int = 20) -> list[dict]:
+    """Cari transaksi berdasarkan keyword di description atau category"""
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .or_(f"description.ilike.%{keyword}%,category.ilike.%{keyword}%")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data
+
