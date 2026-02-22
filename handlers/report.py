@@ -11,10 +11,10 @@ from services.database import (
     get_month_transactions,
     get_category_summary,
 )
-from services.sheets import export_to_sheets
+from services.export import generate_excel, build_export_caption, MONTH_NAMES as EXPORT_MONTH_NAMES
 from services.parser import format_rupiah
 from utils.auth import require_auth
-from utils.formatter import build_transaction_list
+from utils.formatter import build_transaction_list, format_tanggal, parse_iso_date
 from handlers.general import report_keyboard
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
     txs = get_today_transactions(user_id)
 
     now = datetime.now()
-    date_str = now.strftime("%d %B %Y")
+    date_str = format_tanggal(now)
 
     if not txs:
         text = (
@@ -191,7 +191,7 @@ async def _send_kategori(
 
 
 async def _send_export(message, user_id: int, year: int = None, month: int = None, edit: bool = False):
-    """Logic export ke Google Sheets — reusable"""
+    """Export transaksi ke file CSV → kirim ke chat"""
     now = datetime.now()
     year = year or now.year
     month = month or now.month
@@ -207,35 +207,24 @@ async def _send_export(message, user_id: int, year: int = None, month: int = Non
             await message.reply_text(text, reply_markup=report_keyboard())
         return
 
-    # Kirim status loading
-    loading_text = f"⏳ Mengexport <b>{len(txs)}</b> transaksi ke Google Sheets..."
+    # Generate Excel
+    excel_file = generate_excel(txs, month_name, year)
+    caption = build_export_caption(txs, month_name, year)
+
+    # Hapus pesan loading jika dari callback
     if edit:
-        await message.edit_text(loading_text, parse_mode="HTML")
-    else:
-        await message.reply_text(loading_text, parse_mode="HTML")
+        try:
+            await message.edit_text("⏳ Menyiapkan file...")
+            await message.delete()
+        except Exception:
+            pass
 
-    sheet_name = f"{month_name} {year}"
-    url = export_to_sheets(txs, sheet_name=sheet_name)
-
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
-    ])
-
-    if url:
-        text = (
-            f"✅ <b>Export Berhasil!</b>\n\n"
-            f"📊 <b>{len(txs)}</b> transaksi — {month_name} {year}\n"
-            f"🔗 <a href='{url}'>Buka Google Sheets</a>"
-        )
-        await message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
-    else:
-        text = (
-            "❌ <b>Export Gagal</b>\n\n"
-            "Pastikan:\n"
-            "┌ GOOGLE_SHEET_ID sudah diisi di .env\n"
-            "└ Service account punya akses ke spreadsheet"
-        )
-        await message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
+    # Kirim file Excel ke chat
+    await message.reply_document(
+        document=excel_file,
+        caption=caption,
+        parse_mode="HTML",
+    )
 
 
 # ── Command Handlers (entry point dari /command) ───────

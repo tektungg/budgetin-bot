@@ -65,7 +65,7 @@ def report_keyboard():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🗂️ Per Kategori", callback_data="cmd_kategori"),
-            InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
+        InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
         ],
         [
             InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
@@ -76,9 +76,8 @@ def report_keyboard():
 # ── Text Templates ─────────────────────────────────────
 
 START_TEXT = """
-╭─────────────────────────╮
-│    💰 <b>BUDGETIN BOT</b> 💰    │
-╰─────────────────────────╯
+<b>BUDGETIN BOT</b>
+━━━━━━━━━━━━━━━━━━━━
 
 Hai, <b>{name}</b>! 👋
 Saya asisten pencatat keuangan pribadimu.
@@ -93,9 +92,8 @@ Pilih menu di bawah untuk mulai 👇
 """
 
 HELP_TEXT = """
-╭─────────────────────────╮
-│    ❓ <b>PANDUAN LENGKAP</b>    │
-╰─────────────────────────╯
+<b>PANDUAN LENGKAP</b>
+━━━━━━━━━━━━━━━━━━━━
 
 <b>📝 CATAT TRANSAKSI</b>
 <i>Ketik langsung dengan format natural:</i>
@@ -124,7 +122,7 @@ HELP_TEXT = """
 ├ /bulanini — ringkasan bulan ini
 ├ /bulanini <code>1 2025</code> — bulan tertentu
 ├ /kategori — ringkasan per kategori
-└ /export — export ke Google Sheets
+└ /export — export ke file CSV
 """
 
 

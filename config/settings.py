@@ -18,12 +18,6 @@ class Settings:
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")  # service_role key
 
-    # Google Sheets (opsional, untuk export)
-    GOOGLE_SHEET_ID: str = os.getenv("GOOGLE_SHEET_ID", "")
-    GOOGLE_SERVICE_ACCOUNT_FILE: str = os.getenv(
-        "GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"
-    )
-
     # Allowed user IDs (kosongkan = semua orang bisa pakai)
     ALLOWED_USER_IDS: list[int] = None
 
