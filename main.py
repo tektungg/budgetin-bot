@@ -3,6 +3,9 @@ Budgetin Bot - Telegram bot untuk pencatatan keuangan otomatis
 """
 
 import logging
+import threading
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,16 +29,41 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("bot.log"),
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+# ── Health Check Server (untuk Koyeb) ──────────────────
+
+class HealthHandler(BaseHTTPRequestHandler):
+    """Mini HTTP server untuk health check Koyeb"""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass  # Suppress log spam
+
+
+def start_health_server():
+    """Jalankan health check server di background thread"""
+    port = int(os.getenv("PORT", "8000"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"Health check server running on port {port}")
 
 
 def main():
     settings.validate()
     check_connection()
     logger.info("Supabase connected")
+
+    # Start health check server untuk Koyeb
+    start_health_server()
 
     app = Application.builder().token(settings.TELEGRAM_TOKEN).build()
 
