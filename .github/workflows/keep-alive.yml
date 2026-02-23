@@ -1,25 +1,15 @@
-name: Keep Alive
+name: Keep Supabase Alive
 
 on:
   schedule:
-    # Setiap 25 menit — cegah Koyeb sleep (threshold 30 menit)
-    - cron: "*/25 * * * *"
+    # Setiap 3 hari — cegah Supabase free tier di-pause
+    - cron: "0 0 */3 * *"
   workflow_dispatch: # bisa trigger manual
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Koyeb Service
-        run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.KOYEB_URL }}")
-          echo "Koyeb: $response"
-          if [ "$response" -ge 200 ] && [ "$response" -lt 300 ]; then
-            echo "✅ Koyeb is alive!"
-          else
-            echo "⚠️ Koyeb ping returned $response"
-          fi
-
       - name: Ping Supabase
         run: |
           response=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -32,3 +22,4 @@ jobs:
           else
             echo "⚠️ Supabase ping returned $response"
           fi
+          
