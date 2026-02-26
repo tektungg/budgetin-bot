@@ -4,6 +4,9 @@ Dengan inline keyboard untuk navigasi interaktif.
 """
 
 import logging
+import platform
+import time
+from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from services.database import delete_transaction, update_transaction, get_transaction_by_id
@@ -11,6 +14,9 @@ from services.parser import parse_amount, detect_category, format_rupiah
 from utils.auth import require_auth
 
 logger = logging.getLogger(__name__)
+
+# Waktu bot pertama kali start
+_BOT_START_TIME = time.time()
 
 
 # ── Inline Keyboard Menus ──────────────────────────────
@@ -145,6 +151,43 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         HELP_TEXT,
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@require_auth
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan status & health bot"""
+    WIB = timezone(timedelta(hours=7))
+    now = datetime.now(WIB)
+
+    # Uptime
+    uptime_sec = int(time.time() - _BOT_START_TIME)
+    days, rem = divmod(uptime_sec, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    uptime_parts = []
+    if days:
+        uptime_parts.append(f"{days}h")
+    if hours:
+        uptime_parts.append(f"{hours}j")
+    uptime_parts.append(f"{minutes}m")
+    uptime_str = " ".join(uptime_parts)
+
+    from utils.formatter import BULAN
+    bulan = BULAN.get(now.month, "")
+
+    text = (
+        f"🤖 <b>STATUS BOT</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"┌ ⏱️ Uptime: <b>{uptime_str}</b>\n"
+        f"├ 🐍 Python {platform.python_version()}\n"
+        f"└ 🕐 {now.strftime('%d')} {bulan} {now.year}, {now.strftime('%H:%M')} WIB"
+    )
+
+    await update.message.reply_text(
+        text,
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )

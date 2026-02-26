@@ -22,7 +22,7 @@ from handlers.report import (
     cmd_export,
     cmd_cari,
 )
-from handlers.general import cmd_start, cmd_help, cmd_hapus, cmd_edit, handle_callback
+from handlers.general import cmd_start, cmd_help, cmd_status, cmd_hapus, cmd_edit, handle_callback
 from services.database import check_connection
 
 logging.basicConfig(
@@ -78,6 +78,7 @@ def main():
     app.add_handler(CommandHandler("hapus", cmd_hapus))
     app.add_handler(CommandHandler("edit", cmd_edit))
     app.add_handler(CommandHandler("cari", cmd_cari))
+    app.add_handler(CommandHandler("status", cmd_status))
 
     # Callback handler (inline keyboard)
     app.add_handler(CallbackQueryHandler(handle_callback))
