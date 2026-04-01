@@ -101,10 +101,52 @@ def detect_category(description: str) -> str:
     return "Lainnya"
 
 
+def parse_date(text: str) -> tuple[str, "datetime | None"]:
+    """
+    Deteksi dan ekstrak tanggal dari akhir teks input.
+    Format yang didukung: 15/3, 15/3/2025, 15-3, 15-3-2025
+    Return (teks tanpa tanggal, datetime atau None).
+    """
+    from datetime import datetime, timezone, timedelta
+    WIB = timezone(timedelta(hours=7))
+
+    # Pattern tanggal di akhir teks: dd/mm, dd/mm/yyyy, dd-mm, dd-mm-yyyy
+    date_pattern = re.compile(
+        r"\s+(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\s*$"
+    )
+    m = date_pattern.search(text)
+    if not m:
+        return text, None
+
+    day = int(m.group(1))
+    month = int(m.group(2))
+    year_str = m.group(3)
+
+    now = datetime.now(WIB)
+    if year_str:
+        year = int(year_str)
+        if year < 100:
+            year += 2000
+    else:
+        year = now.year
+
+    try:
+        dt = datetime(year, month, day, 12, 0, 0, tzinfo=WIB)  # Siang hari
+        # Jangan terima tanggal di masa depan
+        if dt.date() > now.date():
+            return text, None
+        clean_text = text[:m.start()].strip()
+        return clean_text, dt
+    except ValueError:
+        return text, None
+
+
 def parse_transaction(text: str) -> dict | None:
     """
     Parse teks natural menjadi data transaksi.
-    Return dict {type, amount, category, description} atau None jika gagal.
+    Return dict {type, amount, category, description, date (optional)} atau None jika gagal.
+
+    Mendukung tanggal opsional di akhir: keluar makan 25k 15/3
     """
     text = text.strip()
     lower = text.lower()
@@ -124,6 +166,9 @@ def parse_transaction(text: str) -> dict | None:
         if lower.startswith(prefix):
             text = text[len(prefix):].strip()
             break
+
+    # Deteksi tanggal di akhir teks (sebelum parse nominal)
+    text, tx_date = parse_date(text)
 
     # Cari nominal: pola angka (dengan opsional desimal dan suffix)
     # Contoh cocok: 5000, 5k, 5.5k, 2jt, 15rb, 1.5m
@@ -153,12 +198,16 @@ def parse_transaction(text: str) -> dict | None:
 
     category = detect_category(description)
 
-    return {
+    result = {
         "type": tx_type,
         "amount": amount,
         "category": category,
         "description": description,
     }
+    if tx_date:
+        result["date"] = tx_date
+
+    return result
 
 
 def format_amount(amount: int) -> str:

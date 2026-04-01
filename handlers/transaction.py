@@ -3,6 +3,7 @@ Handler untuk input transaksi (teks dan foto struk)
 Dengan konfirmasi yang lebih rapi & inline keyboard.
 """
 
+import re
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -26,17 +27,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = parse_transaction(text)
 
     if not result:
+        # Deteksi masalah spesifik untuk feedback yang lebih baik
+        lower = text.lower()
+        has_type = lower.startswith(("keluar", "masuk", "out", "in", "bayar", "beli", "terima", "dapat", "income", "+", "-"))
+        has_number = bool(re.search(r"\d", text))
+
+        if not has_type and has_number:
+            hint = (
+                "⚠️ <b>Mulai dengan tipe transaksi</b>\n\n"
+                f"Pesan kamu: <code>{text}</code>\n\n"
+                "Tambahkan <b>keluar</b> atau <b>masuk</b> di depan:\n"
+                f"┌ <code>keluar {text}</code>\n"
+                f"└ <code>masuk {text}</code>"
+            )
+        elif has_type and not has_number:
+            hint = (
+                "⚠️ <b>Nominal tidak ditemukan</b>\n\n"
+                f"Pesan kamu: <code>{text}</code>\n\n"
+                "Tambahkan nominal, contoh:\n"
+                f"<code>{text} 25k</code>"
+            )
+        else:
+            hint = (
+                "❓ <b>Format tidak dikenali</b>\n\n"
+                "Contoh yang bisa kamu kirim:\n"
+                "┌ <code>keluar makan siang 25k</code>\n"
+                "├ <code>masuk gaji 3jt</code>\n"
+                "├ <code>keluar grab 15000</code>\n"
+                "└ <code>masuk freelance desain 500rb</code>\n\n"
+                "📸 Atau kirim <b>foto struk</b> untuk dicatat otomatis."
+            )
+
         await update.message.reply_text(
-            "❓ <b>Format tidak dikenali</b>\n\n"
-            "Contoh yang bisa kamu kirim:\n"
-            "┌ <code>keluar makan siang 25k</code>\n"
-            "├ <code>masuk gaji 3jt</code>\n"
-            "├ <code>keluar grab 15000</code>\n"
-            "└ <code>masuk freelance desain 500rb</code>\n\n"
-            "📸 Atau kirim <b>foto struk</b> untuk dicatat otomatis.\n"
-            "❓ Ketik /help untuk bantuan lengkap.",
+            hint,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❓ Bantuan", callback_data="cmd_help")],
                 [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
             ]),
         )
@@ -49,10 +75,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         category=result["category"],
         description=result["description"],
         source="text",
+        created_at=result.get("date"),
     )
 
+    # Tambahkan info tanggal jika backdate
+    msg = tx_confirmation_message(tx)
+    if result.get("date"):
+        from utils.formatter import format_tanggal
+        msg += f"\n\n📅 <i>Dicatat untuk tanggal {format_tanggal(result['date'])}</i>"
+
     await update.message.reply_text(
-        tx_confirmation_message(tx),
+        msg,
         parse_mode="HTML",
         reply_markup=after_tx_keyboard(tx["id"]),
     )
@@ -79,10 +112,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "┌ 📷 Foto cukup terang dan jelas\n"
             "├ 📄 Struk terlihat seluruhnya\n"
             "└ 🔍 Bukan foto blur\n\n"
-            "💡 Coba catat manual:\n"
+            "💡 Coba kirim ulang foto atau catat manual:\n"
             "<code>keluar nama_toko jumlah</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❓ Bantuan", callback_data="cmd_help")],
                 [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
             ]),
         )

@@ -50,19 +50,23 @@ def insert_transaction(
     category: str,
     description: str,
     source: str = "text",
+    created_at: datetime = None,
 ) -> dict:
     """Insert transaksi baru, return data yang tersimpan"""
     client = get_client()
+    data = {
+        "user_id": user_id,
+        "type": tx_type,
+        "amount": amount,
+        "category": category,
+        "description": description,
+        "source": source,
+    }
+    if created_at:
+        data["created_at"] = created_at.isoformat()
     result = (
         client.table("transactions")
-        .insert({
-            "user_id": user_id,
-            "type": tx_type,
-            "amount": amount,
-            "category": category,
-            "description": description,
-            "source": source,
-        })
+        .insert(data)
         .execute()
     )
     return result.data[0]
@@ -143,6 +147,19 @@ def update_transaction(tx_id: int, user_id: int, **kwargs) -> bool:
     result = (
         client.table("transactions")
         .update(updates)
+        .eq("id", tx_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return len(result.data) > 0
+
+
+def update_transaction_date(tx_id: int, user_id: int, new_date: datetime) -> bool:
+    """Update tanggal transaksi (created_at)"""
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .update({"created_at": new_date.isoformat()})
         .eq("id", tx_id)
         .eq("user_id", user_id)
         .execute()

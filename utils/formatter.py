@@ -8,6 +8,7 @@ from services.parser import format_rupiah
 # Timezone WIB
 WIB = timezone(timedelta(hours=7))
 
+
 BULAN = {
     1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
     5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
@@ -101,7 +102,8 @@ def build_transaction_list(transactions: list[dict], limit: int = None) -> str:
 
         emoji = "💸" if tx["type"] == "keluar" else "💰"
         amount_str = format_rupiah(tx["amount"])
-        desc = tx.get("description", "")[:35]
+        raw_desc = tx.get("description", "")
+        desc = raw_desc[:32] + "…" if len(raw_desc) > 35 else raw_desc
         tx_id = tx.get("id", "")
 
         lines.append(f"  {emoji} {desc} — <b>{amount_str}</b>  <i>[#{tx_id}]</i>")
