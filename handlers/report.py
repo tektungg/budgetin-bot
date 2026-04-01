@@ -10,13 +10,14 @@ from services.database import (
     get_today_transactions,
     get_month_transactions,
     get_category_summary,
+    get_available_months,
     search_transactions,
 )
 from services.export import generate_excel, build_export_caption, MONTH_NAMES as EXPORT_MONTH_NAMES
 from services.parser import format_rupiah
 from utils.auth import require_auth
 from utils.formatter import build_transaction_list, format_tanggal, parse_iso_date
-from handlers.general import report_keyboard
+from handlers.general import report_keyboard, _safe_edit_or_reply
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
             f"💡 Ketik transaksi untuk mulai mencatat!"
         )
         if edit:
-            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
         else:
             await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
         return
@@ -78,7 +79,7 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
 
     text = "\n".join(lines)
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
 
@@ -100,7 +101,7 @@ async def _send_bulan_ini(
             f"<i>Belum ada transaksi bulan ini.</i>"
         )
         if edit:
-            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
         else:
             await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
         return
@@ -120,7 +121,7 @@ async def _send_bulan_ini(
 
     text = "\n".join(lines)
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
 
@@ -142,7 +143,7 @@ async def _send_kategori(
             f"<i>Belum ada transaksi.</i>"
         )
         if edit:
-            await message.edit_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
         else:
             await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
         return
@@ -186,45 +187,85 @@ async def _send_kategori(
 
     text = "\n".join(lines)
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
-async def _send_export(message, user_id: int, year: int = None, month: int = None, edit: bool = False):
-    """Export transaksi ke file CSV → kirim ke chat"""
-    now = datetime.now()
-    year = year or now.year
-    month = month or now.month
+async def _send_export(message, user_id: int, edit: bool = False):
+    """Tampilkan pilihan bulan yang tersedia untuk export"""
+    months = get_available_months(user_id)
 
-    txs = get_month_transactions(user_id, year, month)
-    month_name = MONTH_NAMES.get(month, str(month))
-
-    if not txs:
-        text = f"📤 Tidak ada transaksi untuk {month_name} {year}."
-        if edit:
-            await message.edit_text(text, reply_markup=report_keyboard())
+    if not months:
+        text = "📤 <b>Export</b>\n\n<i>Belum ada transaksi untuk di-export.</i>"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+        ])
+        if edit and message.text:
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
         else:
-            await message.reply_text(text, reply_markup=report_keyboard())
+            await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    # Generate Excel
+    # Buat tombol untuk setiap bulan yang ada datanya
+    buttons = []
+    row = []
+    for m in months:
+        month_name = MONTH_NAMES.get(m["month"], str(m["month"]))
+        label = f"{month_name} {m['year']}"
+        callback = f"doexport_{m['year']}_{m['month']}"
+        row.append(InlineKeyboardButton(label, callback_data=callback))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")])
+
+    text = "📤 <b>Export ke Excel</b>\n\nPilih bulan yang ingin di-export 👇"
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if edit and message.text:
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _do_export(message, user_id: int, year: int, month: int):
+    """Export transaksi bulan tertentu ke file Excel"""
+    month_name = MONTH_NAMES.get(month, str(month))
+    txs = get_month_transactions(user_id, year, month)
+
+    if not txs:
+        await message.edit_text(
+            f"📤 Tidak ada transaksi untuk {month_name} {year}.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Pilih Bulan Lain", callback_data="cmd_export")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
+        return
+
+    # Loading state
+    try:
+        await message.edit_text("⏳ Menyiapkan file...")
+        await message.delete()
+    except Exception:
+        pass
+
+    # Generate & kirim Excel
     excel_file = generate_excel(txs, month_name, year)
     caption = build_export_caption(txs, month_name, year)
 
-    # Hapus pesan loading jika dari callback
-    if edit:
-        try:
-            await message.edit_text("⏳ Menyiapkan file...")
-            await message.delete()
-        except Exception:
-            pass
-
-    # Kirim file Excel ke chat
     await message.reply_document(
         document=excel_file,
         caption=caption,
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📤 Export Bulan Lain", callback_data="cmd_export")],
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+        ]),
     )
 
 
@@ -255,6 +296,9 @@ async def cmd_bulan_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ Format: <code>/bulanini [bulan] [tahun]</code>\n"
                 "Contoh: <code>/bulanini 1 2025</code>",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
             )
             return
 
@@ -286,10 +330,10 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     args = context.args
 
-    year = datetime.now().year
-    month = datetime.now().month
-
     if args:
+        # Direct export jika user ketik /export bulan tahun
+        year = datetime.now().year
+        month = datetime.now().month
         try:
             if len(args) >= 1:
                 month = int(args[0])
@@ -298,7 +342,31 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    await _send_export(update.message, user_id, year, month)
+        month_name = MONTH_NAMES.get(month, str(month))
+        txs = get_month_transactions(user_id, year, month)
+        if not txs:
+            await update.message.reply_text(
+                f"📤 Tidak ada transaksi untuk {month_name} {year}.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📤 Pilih Bulan Lain", callback_data="cmd_export")],
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
+            return
+        excel_file = generate_excel(txs, month_name, year)
+        caption = build_export_caption(txs, month_name, year)
+        await update.message.reply_document(
+            document=excel_file,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📤 Export Bulan Lain", callback_data="cmd_export")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
+    else:
+        # Tampilkan pilihan bulan
+        await _send_export(update.message, user_id)
 
 
 @require_auth
@@ -315,6 +383,9 @@ async def cmd_cari(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<code>/cari gaji</code>\n\n"
             "<i>Cari di deskripsi dan kategori transaksi.</i>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 
@@ -336,7 +407,7 @@ async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
             [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
         ])
         if edit:
-            await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
         else:
             await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
         return
@@ -363,7 +434,7 @@ async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
 
     text = "\n".join(lines)
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 

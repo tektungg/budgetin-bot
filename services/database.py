@@ -164,6 +164,39 @@ def get_transaction_by_id(tx_id: int, user_id: int) -> dict | None:
     return result.data
 
 
+def get_available_months(user_id: int) -> list[dict]:
+    """Ambil daftar bulan & tahun yang memiliki transaksi (distinct year-month)"""
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .select("created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    seen = set()
+    months = []
+    for row in result.data:
+        created = row["created_at"]
+        if isinstance(created, str):
+            # Normalize fractional seconds to 6 digits for Python 3.10 compat
+            import re
+            created = re.sub(
+                r"(\.\d{1,6})\d*",
+                lambda m: m.group(1).ljust(7, "0"),
+                created.replace("Z", "+00:00"),
+            )
+            dt = datetime.fromisoformat(created).astimezone(WIB)
+        else:
+            dt = created
+        key = (dt.year, dt.month)
+        if key not in seen:
+            seen.add(key)
+            months.append({"year": dt.year, "month": dt.month})
+    return months
+
+
 def search_transactions(user_id: int, keyword: str, limit: int = 20) -> list[dict]:
     """Cari transaksi berdasarkan keyword di description atau category"""
     client = get_client()

@@ -3,10 +3,17 @@ Konfigurasi aplikasi Budgetin Bot — baca dari environment variables
 """
 
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env.local dulu (untuk testing), lalu fallback ke .env
+_env_dir = Path(__file__).resolve().parent.parent
+_local_env = _env_dir / ".env.local"
+if _local_env.exists():
+    load_dotenv(_local_env, override=True)
+else:
+    load_dotenv()
 
 
 @dataclass

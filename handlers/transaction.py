@@ -11,6 +11,7 @@ from services.database import insert_transaction
 from services.gemini import analyze_receipt
 from utils.auth import require_auth
 from utils.formatter import tx_confirmation_message
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from handlers.general import after_tx_keyboard
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📸 Atau kirim <b>foto struk</b> untuk dicatat otomatis.\n"
             "❓ Ketik /help untuk bantuan lengkap.",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 
@@ -78,6 +82,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💡 Coba catat manual:\n"
             "<code>keluar nama_toko jumlah</code>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 

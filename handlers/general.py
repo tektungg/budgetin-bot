@@ -46,6 +46,9 @@ def after_tx_keyboard(tx_id: int):
             InlineKeyboardButton("✏️ Edit", callback_data=f"edit_{tx_id}"),
             InlineKeyboardButton("🗑️ Hapus", callback_data=f"hapus_{tx_id}"),
         ],
+        [
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
+        ],
     ])
 
 
@@ -62,6 +65,7 @@ def edit_field_keyboard(tx_id: int):
         ],
         [
             InlineKeyboardButton("⬅️ Kembali", callback_data=f"back_{tx_id}"),
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
         ],
     ])
 
@@ -206,18 +210,33 @@ async def cmd_hapus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Contoh: <code>/hapus 42</code>\n\n"
             "<i>💡 ID terlihat di laporan dalam format [#42]</i>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 
     try:
         tx_id = int(args[0].lstrip("#"))
     except ValueError:
-        await update.message.reply_text("⚠️ ID harus berupa angka.\nContoh: <code>/hapus 42</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "⚠️ ID harus berupa angka.\nContoh: <code>/hapus 42</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
         return
 
     tx = get_transaction_by_id(tx_id, user_id)
     if not tx:
-        await update.message.reply_text(f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
         return
 
     success = delete_transaction(tx_id, user_id)
@@ -230,12 +249,18 @@ async def cmd_hapus(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 {format_rupiah(tx['amount'])} ({tipe})\n"
             f"🔖 ID: <code>#{tx_id}</code>",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
-            ]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
     else:
-        await update.message.reply_text("❌ Gagal menghapus transaksi.")
+        await update.message.reply_text(
+            "❌ Gagal menghapus transaksi.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
 
 
 @require_auth
@@ -258,13 +283,22 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "├ <code>/edit 42 category Transportasi</code>\n"
             "└ <code>/edit 42 description grab ke kantor</code>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 
     try:
         tx_id = int(args[0].lstrip("#"))
     except ValueError:
-        await update.message.reply_text("⚠️ ID harus berupa angka.", parse_mode="HTML")
+        await update.message.reply_text(
+            "⚠️ ID harus berupa angka.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
         return
 
     field = args[1].lower()
@@ -276,19 +310,31 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ Field <code>{field}</code> tidak valid.\n\n"
             f"Gunakan: <code>{', '.join(sorted(allowed_fields))}</code>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
         return
 
     if field == "amount":
         value = parse_amount(value_raw)
         if not value:
-            await update.message.reply_text("⚠️ Format nominal tidak valid.", parse_mode="HTML")
+            await update.message.reply_text(
+                "⚠️ Format nominal tidak valid.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
             return
     elif field == "type":
         if value_raw not in ("masuk", "keluar"):
             await update.message.reply_text(
                 "⚠️ Tipe harus <code>masuk</code> atau <code>keluar</code>.",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
             )
             return
         value = value_raw
@@ -297,7 +343,13 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tx = get_transaction_by_id(tx_id, user_id)
     if not tx:
-        await update.message.reply_text(f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
         return
 
     success = update_transaction(tx_id, user_id, **{field: value})
@@ -314,12 +366,26 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔖 ID: <code>#{tx_id}</code>\n"
             f"📝 {field_labels.get(field, field)}: <code>{value_raw}</code>",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
-            ]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini")],
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
         )
     else:
-        await update.message.reply_text("❌ Gagal memperbarui transaksi.")
+        await update.message.reply_text(
+            "❌ Gagal memperbarui transaksi.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
+
+
+async def _safe_edit_or_reply(message, text: str, **kwargs):
+    """edit_text jika pesan adalah teks, reply_text jika dokumen/foto"""
+    if message.text:
+        await message.edit_text(text, **kwargs)
+    else:
+        await message.reply_text(text, **kwargs)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -336,17 +402,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _send_bulan_ini,
         _send_kategori,
         _send_export,
+        _do_export,
     )
 
     if data == "cmd_start":
         name = query.from_user.first_name or "User"
-        await query.message.edit_text(
+        await _safe_edit_or_reply(
+            query.message,
             START_TEXT.format(name=name),
             parse_mode="HTML",
             reply_markup=main_menu_keyboard(),
         )
     elif data == "cmd_help":
-        await query.message.edit_text(
+        await _safe_edit_or_reply(
+            query.message,
             HELP_TEXT,
             parse_mode="HTML",
             reply_markup=main_menu_keyboard(),
@@ -359,6 +428,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_kategori(query.message, user_id, edit=True)
     elif data == "cmd_export":
         await _send_export(query.message, user_id, edit=True)
+    elif data.startswith("doexport_"):
+        # Format: doexport_YYYY_MM
+        parts = data.split("_")
+        year = int(parts[1])
+        month = int(parts[2])
+        await _do_export(query.message, user_id, year, month)
     elif data.startswith("edit_"):
         # Tampilkan sub-menu pilihan field
         tx_id = int(data.split("_")[1])
@@ -380,6 +455,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
             )
     elif data.startswith("editfield_"):
         # User memilih field → tampilkan instruksi
@@ -403,7 +481,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<i>💡 Salin perintah di atas, ubah nilainya, lalu kirim.</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Kembali", callback_data=f"edit_{tx_id}")],
+                [
+                    InlineKeyboardButton("⬅️ Kembali", callback_data=f"edit_{tx_id}"),
+                    InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
+                ],
             ]),
         )
     elif data.startswith("back_"):
@@ -421,6 +502,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
             )
     elif data.startswith("hapus_"):
         tx_id = int(data.split("_")[1])
@@ -438,9 +522,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ]]),
                 )
             else:
-                await query.message.edit_text("❌ Gagal menghapus transaksi.")
+                await query.message.edit_text(
+                    "❌ Gagal menghapus transaksi.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                    ]),
+                )
         else:
             await query.message.edit_text(
                 f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
             )
