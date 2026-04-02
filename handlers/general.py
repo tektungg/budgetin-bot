@@ -76,16 +76,34 @@ def edit_field_keyboard(tx_id: int):
     ])
 
 
-def report_keyboard(year: int = None, month: int = None):
-    """Keyboard di bawah laporan — year/month untuk konteks edit"""
+def report_keyboard(year: int = None, month: int = None, page: int = 0, total_pages: int = 1):
+    """Keyboard di bawah laporan — year/month untuk konteks edit dan navigasi page"""
     from datetime import datetime as _dt
     now = _dt.now()
     y = year or now.year
     m = month or now.month
 
-    return InlineKeyboardMarkup([
+    buttons = []
+    
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"viewbulanp_{y}_{m}_{page-1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+            
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+            
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"viewbulanp_{y}_{m}_{page+1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+            
+        buttons.append(nav_row)
+
+    buttons.extend([
         [
-            InlineKeyboardButton("🗂️ Per Kategori", callback_data="cmd_kategori"),
+            InlineKeyboardButton("🗂️ Per Kategori", callback_data=f"cmd_kategori_{y}_{m}"),
             InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
         ],
         [
@@ -96,6 +114,8 @@ def report_keyboard(year: int = None, month: int = None):
             InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
         ],
     ])
+    
+    return InlineKeyboardMarkup(buttons)
 
 
 # ── Text Templates ─────────────────────────────────────
@@ -487,8 +507,112 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         year = int(parts[1])
         month = int(parts[2])
         await _send_bulan_ini(query.message, user_id, year=year, month=month, edit=True)
-    elif data == "cmd_kategori":
-        await _send_kategori(query.message, user_id, edit=True)
+    elif data.startswith("viewbulanp_"):
+        parts = data.split("_")
+        year = int(parts[1])
+        month = int(parts[2])
+        page = int(parts[3])
+        await _send_bulan_ini(query.message, user_id, year=year, month=month, page=page, edit=True)
+    elif data.startswith("cmd_kategori"):
+        if data == "cmd_kategori":
+            await _send_kategori(query.message, user_id, edit=True)
+        elif data.startswith("cmd_kategori_back_"):
+            parts = data.split("_")
+            year = int(parts[3])
+            month = int(parts[4])
+            await _send_kategori(query.message, user_id, year=year, month=month, edit=True)
+        else:
+            parts = data.split("_")
+            if len(parts) >= 4:
+                year = int(parts[2])
+                month = int(parts[3])
+                await _send_kategori(query.message, user_id, year=year, month=month, edit=True)
+    elif data.startswith("catdrill_"):
+        parts = data.split("_")
+        year = int(parts[1])
+        month = int(parts[2])
+        tx_type = parts[3]
+        cat_name = "_".join(parts[4:-1])
+        page = int(parts[-1])
+        from handlers.report import _send_category_drilldown
+        await _send_category_drilldown(query.message, user_id, year, month, tx_type, cat_name, page)
+
+    elif data == "rcpt_ok":
+        items = context.user_data.pop("pending_receipt", [])
+        if not items:
+            await query.message.edit_text("❌ Gagal: Tidak ada data struk tersimpan.")
+            return
+            
+        saved = []
+        for tx_data in items:
+            from services.database import insert_transaction
+            tx = insert_transaction(
+                user_id=user_id,
+                tx_type=tx_data["type"],
+                amount=tx_data["amount"],
+                category=tx_data["category"],
+                description=tx_data["description"],
+                source="photo",
+            )
+            saved.append(tx)
+            
+        if len(saved) == 1:
+            from utils.formatter import tx_confirmation_message
+            await query.message.edit_text(
+                "📸 <b>Struk Berhasil Dicatat!</b>\n\n" + tx_confirmation_message(saved[0]),
+                parse_mode="HTML",
+                reply_markup=after_tx_keyboard(saved[0]["id"]),
+            )
+        else:
+            total = sum(tx["amount"] for tx in saved)
+            lines = ["📸 <b>Struk Berhasil Dicatat!</b>\n"]
+            for tx in saved:
+                emoji = "💸" if tx["type"] == "keluar" else "💰"
+                lines.append(f"{emoji} {tx['description']} — <b>{format_rupiah(tx['amount'])}</b>")
+            lines.append(f"\n{'─' * 28}")
+            lines.append(f"📌 <b>{len(saved)} transaksi</b> • Total: <b>{format_rupiah(total)}</b>")
+            await query.message.edit_text(
+                "\n".join(lines),
+                parse_mode="HTML",
+                reply_markup=main_menu_keyboard(),
+            )
+    elif data == "rcpt_no":
+        context.user_data.pop("pending_receipt", None)
+        await query.message.edit_text(
+            "🚫 <b>Penyimpanan Struk Dibatalkan</b>",
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard()
+        )
+    elif data.startswith("rcpt_del_"):
+        idx = int(data.split("_")[-1])
+        items = context.user_data.get("pending_receipt", [])
+        if idx < len(items):
+            items.pop(idx)
+            if not items:
+                context.user_data.pop("pending_receipt", None)
+                await query.message.edit_text(
+                    "🚫 <b>Penyimpanan Struk Dibatalkan</b> (semua item dihapus)",
+                    parse_mode="HTML",
+                    reply_markup=main_menu_keyboard()
+                )
+                return
+            context.user_data["pending_receipt"] = items
+            from handlers.transaction import _render_receipt_preview
+            msg, kb = _render_receipt_preview(items)
+            await query.message.edit_text(msg, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("rcpt_edit_"):
+        idx = int(data.split("_")[-1])
+        items = context.user_data.get("pending_receipt", [])
+        if idx < len(items):
+            context.user_data["receipt_edit_index"] = idx
+            item = items[idx]
+            await query.message.edit_text(
+                f"✏️ <b>Edit Item {idx+1}</b>\n\n"
+                f"Saat ini: {item['description']} — {format_rupiah(item['amount'])} ({item['category']})\n\n"
+                "Balas pesan ini dengan nominal dan deskripsi baru, misalnya: <code>25000 Makan Siang</code>",
+                parse_mode="HTML"
+            )
+
     elif data == "cmd_export":
         await _send_export(query.message, user_id, edit=True)
     elif data.startswith("doexport_"):
@@ -763,23 +887,40 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
             )
     elif data.startswith("konfirmhapus_"):
-        # User sudah konfirmasi → hapus sekarang
+        # User sudah konfirmasi → (soft) hapus sekarang
         tx_id = int(data.split("_")[1])
         tx = get_transaction_by_id(tx_id, user_id)
         if tx:
             success = delete_transaction(tx_id, user_id)
             if success:
-                await query.message.edit_text(
-                    f"✅ <b>Transaksi <code>#{tx_id}</code> dihapus</b>\n\n"
+                msg = await query.message.edit_text(
+                    f"🗑️ Transaksi <code>#{tx_id}</code> berhasil dihapus.\n\n"
                     f"💸 {tx['description']} — {format_rupiah(tx['amount'])}",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("↩️ Batal (Undo)", callback_data=f"undel_{tx_id}")],
                         [
                             InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
                             InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
                         ],
                     ]),
                 )
+                
+                # Schedule removal of undo button after 30 seconds
+                async def remove_undo(context_arg: ContextTypes.DEFAULT_TYPE):
+                    try:
+                        await msg.edit_reply_markup(
+                            reply_markup=InlineKeyboardMarkup([
+                                [
+                                    InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
+                                    InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
+                                ],
+                            ])
+                        )
+                    except Exception:
+                        pass
+                
+                context.job_queue.run_once(remove_undo, 30.0)
             else:
                 await query.message.edit_text(
                     "❌ Gagal menghapus transaksi.",
@@ -791,6 +932,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
+    elif data.startswith("undel_"):
+        tx_id = int(data.split("_")[1])
+        # Restore transaction
+        from services.database import restore_transaction
+        success = restore_transaction(tx_id, user_id)
+        if success:
+            tx = get_transaction_by_id(tx_id, user_id)
+            from utils.formatter import tx_confirmation_message
+            await query.message.edit_text(
+                tx_confirmation_message(tx),
+                parse_mode="HTML",
+                reply_markup=after_tx_keyboard(tx_id)
+            )
+        else:
+            await query.message.edit_text(
+                "❌ Gagal memulihkan transaksi.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
                 ]),

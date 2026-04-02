@@ -101,6 +101,7 @@ def get_month_transactions(
         .eq("user_id", user_id)
         .gte("created_at", start_of_month.isoformat())
         .lt("created_at", end_of_month.isoformat())
+        .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .execute()
     )
@@ -124,11 +125,25 @@ def get_category_summary(
 
 
 def delete_transaction(tx_id: int, user_id: int) -> bool:
-    """Hapus transaksi berdasarkan ID dan user_id"""
+    """Hapus transaksi (soft-delete) berdasarkan ID dan user_id"""
+    client = get_client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = (
+        client.table("transactions")
+        .update({"deleted_at": now_iso})
+        .eq("id", tx_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return len(result.data) > 0
+
+
+def restore_transaction(tx_id: int, user_id: int) -> bool:
+    """Pulihkan transaksi yang di-soft-delete berdasarkan ID dan user_id"""
     client = get_client()
     result = (
         client.table("transactions")
-        .delete()
+        .update({"deleted_at": None})
         .eq("id", tx_id)
         .eq("user_id", user_id)
         .execute()
@@ -175,6 +190,7 @@ def get_transaction_by_id(tx_id: int, user_id: int) -> dict | None:
         .select("*")
         .eq("id", tx_id)
         .eq("user_id", user_id)
+        .is_("deleted_at", "null")
         .maybe_single()
         .execute()
     )
@@ -188,6 +204,7 @@ def get_recent_transactions(user_id: int, limit: int = 10) -> list[dict]:
         client.table("transactions")
         .select("*")
         .eq("user_id", user_id)
+        .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
@@ -202,6 +219,7 @@ def get_available_months(user_id: int) -> list[dict]:
         client.table("transactions")
         .select("created_at")
         .eq("user_id", user_id)
+        .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .execute()
     )
@@ -236,9 +254,39 @@ def search_transactions(user_id: int, keyword: str, limit: int = 20) -> list[dic
         .select("*")
         .eq("user_id", user_id)
         .or_(f"description.ilike.%{keyword}%,category.ilike.%{keyword}%")
+        .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
     )
     return result.data
 
+
+def get_transactions_by_category(
+    user_id: int, year: int, month: int, tx_type: str, category: str
+) -> list[dict]:
+    """Ambil transaksi bulan tertentu berdasarkan kategori dan tipe (Drill-down)"""
+    now = datetime.now(WIB)
+    year = year or now.year
+    month = month or now.month
+
+    start_of_month = datetime(year, month, 1, tzinfo=WIB)
+    if month == 12:
+        end_of_month = datetime(year + 1, 1, 1, tzinfo=WIB)
+    else:
+        end_of_month = datetime(year, month + 1, 1, tzinfo=WIB)
+
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("type", tx_type)
+        .eq("category", category)
+        .gte("created_at", start_of_month.isoformat())
+        .lt("created_at", end_of_month.isoformat())
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data

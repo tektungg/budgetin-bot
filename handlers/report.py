@@ -123,7 +123,7 @@ async def _send_pilih_bulan(message, user_id: int, edit: bool = False):
 
 
 async def _send_bulan_ini(
-    message, user_id: int, year: int = None, month: int = None, edit: bool = False
+    message, user_id: int, year: int = None, month: int = None, edit: bool = False, page: int = 0
 ):
     """Logic laporan bulanan — reusable"""
     now = datetime.now()
@@ -132,7 +132,9 @@ async def _send_bulan_ini(
 
     txs = get_month_transactions(user_id, year, month)
     month_name = MONTH_NAMES.get(month, str(month))
-    kb = report_keyboard(year, month)
+    
+    total_pages = max(1, (len(txs) + 9) // 10)
+    kb = report_keyboard(year, month, page, total_pages)
 
     if not txs:
         text = (
@@ -146,17 +148,15 @@ async def _send_bulan_ini(
         return
 
     total_masuk, total_keluar, saldo = _summary_stats(txs)
+    paginated_txs = txs[page*10:(page+1)*10]
 
     lines = [
         f"📅 <b>Laporan {month_name} {year}</b>",
-        f"📝 {len(txs)} transaksi tercatat\n",
+        f"📝 {len(txs)} transaksi tercatat — Halaman {page+1}/{total_pages}\n",
         _build_summary_block(total_masuk, total_keluar, saldo),
         f"\n{'─' * 30}\n",
-        build_transaction_list(txs, limit=20),
+        build_transaction_list(paginated_txs),
     ]
-
-    if len(txs) > 20:
-        lines.append(f"\n<i>... dan {len(txs) - 20} transaksi lainnya</i>")
 
     text = "\n".join(lines)
     if edit:
@@ -216,10 +216,20 @@ async def _send_kategori(
             )
 
     text = "\n".join(lines)
+    
+    buttons = []
+    for r in summary:
+        cat_name = r['category'][:15]
+        buttons.append([InlineKeyboardButton(f"🔍 Detail {r['category']} ({r['count']}x)", callback_data=f"catdrill_{year}_{month}_{r['type']}_{cat_name}_0")])
+    
+    kb_dict = kb.to_dict()
+    buttons.extend(kb_dict['inline_keyboard'])
+    final_kb = InlineKeyboardMarkup(buttons)
+
     if edit:
-        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=final_kb)
     else:
-        await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        await message.reply_text(text, parse_mode="HTML", reply_markup=final_kb)
 
 
 async def _send_export(message, user_id: int, edit: bool = False):
@@ -468,3 +478,55 @@ async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
+
+
+async def _send_category_drilldown(
+    message, user_id: int, year: int, month: int, tx_type: str, category_short: str, page: int = 0
+):
+    """Tampilkan detail transaksi untuk kategori tertentu (dengan navigasi pagination)"""
+    from services.database import get_category_summary, get_transactions_by_category
+    
+    summary = get_category_summary(user_id, year, month)
+    original_category = category_short
+    for r in summary:
+        if r["type"] == tx_type and r["category"][:15] == category_short:
+            original_category = r["category"]
+            break
+
+    txs = get_transactions_by_category(user_id, year, month, tx_type, original_category)
+    month_name = MONTH_NAMES.get(month, str(month))
+    
+    total_pages = max(1, (len(txs) + 9) // 10)
+    page_txs = txs[page*10:(page+1)*10]
+    
+    lines = [
+        f"🗂️ <b>Detail Kategori: {original_category}</b>",
+        f"📅 {month_name} {year}  •  📝 {len(txs)} transaksi",
+        f"Halaman {page+1}/{total_pages}\n",
+        f"{'─' * 30}\n",
+        build_transaction_list(page_txs),
+    ]
+
+    text = "\n".join(lines)
+    
+    buttons = []
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"catdrill_{year}_{month}_{tx_type}_{category_short}_{page-1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+            
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+            
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"catdrill_{year}_{month}_{tx_type}_{category_short}_{page+1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+        buttons.append(nav_row)
+
+    buttons.append([InlineKeyboardButton("⬅️ Kembali ke Kategori", callback_data=f"cmd_kategori_back_{year}_{month}")])
+    buttons.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")])
+
+    final_kb = InlineKeyboardMarkup(buttons)
+    await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=final_kb)
