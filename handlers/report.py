@@ -53,6 +53,7 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
 
     now = datetime.now()
     date_str = format_tanggal(now)
+    kb = report_keyboard(now.year, now.month)
 
     if not txs:
         text = (
@@ -62,9 +63,9 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
             f"💡 Ketik transaksi untuk mulai mencatat!"
         )
         if edit:
-            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
         else:
-            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
         return
 
     total_masuk, total_keluar, saldo = _summary_stats(txs)
@@ -79,9 +80,46 @@ async def _send_hari_ini(message, user_id: int, edit: bool = False):
 
     text = "\n".join(lines)
     if edit:
-        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
     else:
-        await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def _send_pilih_bulan(message, user_id: int, edit: bool = False):
+    """Tampilkan pilihan bulan yang tersedia untuk dilihat ringkasannya"""
+    months = get_available_months(user_id)
+
+    now = datetime.now()
+    current_key = (now.year, now.month)
+    current_name = MONTH_NAMES.get(now.month, "")
+
+    # Pastikan bulan ini selalu muncul di atas
+    has_current = any(m["year"] == now.year and m["month"] == now.month for m in months)
+
+    buttons = []
+    # Tombol bulan ini selalu di atas
+    buttons.append([InlineKeyboardButton(
+        f"📅 {current_name} {now.year} (Bulan Ini)",
+        callback_data=f"viewbulan_{now.year}_{now.month}",
+    )])
+
+    # Bulan lain yang ada datanya
+    for m in months:
+        if (m["year"], m["month"]) == current_key:
+            continue  # sudah ditampilkan di atas
+        month_name = MONTH_NAMES.get(m["month"], str(m["month"]))
+        label = f"{month_name} {m['year']}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"viewbulan_{m['year']}_{m['month']}")])
+
+    buttons.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")])
+
+    text = "📅 <b>Laporan Bulanan</b>\n\nPilih bulan yang ingin dilihat 👇"
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if edit and message.text:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def _send_bulan_ini(
@@ -94,6 +132,7 @@ async def _send_bulan_ini(
 
     txs = get_month_transactions(user_id, year, month)
     month_name = MONTH_NAMES.get(month, str(month))
+    kb = report_keyboard(year, month)
 
     if not txs:
         text = (
@@ -101,9 +140,9 @@ async def _send_bulan_ini(
             f"<i>Belum ada transaksi bulan ini.</i>"
         )
         if edit:
-            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
         else:
-            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
         return
 
     total_masuk, total_keluar, saldo = _summary_stats(txs)
@@ -121,9 +160,9 @@ async def _send_bulan_ini(
 
     text = "\n".join(lines)
     if edit:
-        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
     else:
-        await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+        await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def _send_kategori(
@@ -136,6 +175,7 @@ async def _send_kategori(
 
     summary = get_category_summary(user_id, year, month)
     month_name = MONTH_NAMES.get(month, str(month))
+    kb = report_keyboard(year, month)
 
     if not summary:
         text = (
@@ -143,9 +183,9 @@ async def _send_kategori(
             f"<i>Belum ada transaksi.</i>"
         )
         if edit:
-            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=report_keyboard())
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
         else:
-            await message.reply_text(text, parse_mode="HTML", reply_markup=report_keyboard())
+            await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
         return
 
     keluar_rows = [r for r in summary if r["type"] == "keluar"]
@@ -175,21 +215,11 @@ async def _send_kategori(
                 f"     {bar} <b>{format_rupiah(row['total'])}</b> ({pct}%)"
             )
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
-            InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
-        ],
-        [
-            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
-        ],
-    ])
-
     text = "\n".join(lines)
     if edit:
-        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=kb)
     else:
-        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def _send_export(message, user_id: int, edit: bool = False):

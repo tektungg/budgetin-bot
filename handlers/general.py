@@ -9,8 +9,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from services.database import delete_transaction, update_transaction, update_transaction_date, get_transaction_by_id
-from services.parser import parse_amount, detect_category, format_rupiah
+from services.database import delete_transaction, update_transaction, update_transaction_date, get_transaction_by_id, get_month_transactions
+from services.parser import parse_amount, detect_category, format_rupiah, CATEGORY_KEYWORDS
 from utils.auth import require_auth
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def main_menu_keyboard():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
-            InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
+            InlineKeyboardButton("📅 Bulanan", callback_data="cmd_pilihbulan"),
         ],
         [
             InlineKeyboardButton("🗂️ Kategori", callback_data="cmd_kategori"),
@@ -67,18 +67,30 @@ def edit_field_keyboard(tx_id: int):
             InlineKeyboardButton("📝 Deskripsi", callback_data=f"editfield_{tx_id}_description"),
         ],
         [
+            InlineKeyboardButton("📅 Tanggal", callback_data=f"tgl_{tx_id}"),
+        ],
+        [
             InlineKeyboardButton("⬅️ Kembali", callback_data=f"back_{tx_id}"),
             InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
         ],
     ])
 
 
-def report_keyboard():
-    """Keyboard di bawah laporan"""
+def report_keyboard(year: int = None, month: int = None):
+    """Keyboard di bawah laporan — year/month untuk konteks edit"""
+    from datetime import datetime as _dt
+    now = _dt.now()
+    y = year or now.year
+    m = month or now.month
+
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🗂️ Per Kategori", callback_data="cmd_kategori"),
-        InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
+            InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
+        ],
+        [
+            InlineKeyboardButton("📅 Bulan Lain", callback_data="cmd_pilihbulan"),
+            InlineKeyboardButton("✏️ Edit Transaksi", callback_data=f"edittx_{y}_{m}_0"),
         ],
         [
             InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
@@ -130,10 +142,13 @@ HELP_TEXT = """
 └ <code>2000000</code> = <code>2m</code> = <code>2jt</code> → Rp 2.000.000
 
 <b>✏️ EDIT & HAPUS</b>
-┌ <code>/hapus 42</code> — hapus transaksi #42
-├ <code>/edit 42 amount 30k</code>
-├ <code>/edit 42 category Transportasi</code>
-└ <code>/edit 42 description grab ke kantor</code>
+<i>Klik tombol ✏️ Edit setelah catat transaksi,
+lalu pilih field yang ingin diubah.</i>
+┌ 💵 Nominal — ketik nilai baru
+├ 🗂️ Kategori — pilih dari daftar
+├ 🔄 Tipe — pilih masuk/keluar
+├ 📝 Deskripsi — ketik teks baru
+└ 📅 Tanggal — pilih tanggal lain
 
 <b>📊 LAPORAN</b>
 ┌ /hariini — transaksi hari ini
@@ -157,6 +172,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
+
+
+async def cmd_batal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Batalkan proses edit yang sedang berlangsung"""
+    edit_state = context.user_data.pop("edit_state", None)
+    if edit_state:
+        await update.message.reply_text(
+            "❌ Edit dibatalkan.",
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "Tidak ada proses yang sedang berjalan.",
+            reply_markup=main_menu_keyboard(),
+        )
 
 
 @require_auth
@@ -424,6 +455,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from handlers.report import (
         _send_hari_ini,
         _send_bulan_ini,
+        _send_pilih_bulan,
         _send_kategori,
         _send_export,
         _do_export,
@@ -448,6 +480,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_hari_ini(query.message, user_id, edit=True)
     elif data == "cmd_bulanini":
         await _send_bulan_ini(query.message, user_id, edit=True)
+    elif data == "cmd_pilihbulan":
+        await _send_pilih_bulan(query.message, user_id, edit=True)
+    elif data.startswith("viewbulan_"):
+        parts = data.split("_")
+        year = int(parts[1])
+        month = int(parts[2])
+        await _send_bulan_ini(query.message, user_id, year=year, month=month, edit=True)
     elif data == "cmd_kategori":
         await _send_kategori(query.message, user_id, edit=True)
     elif data == "cmd_export":
@@ -458,6 +497,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         year = int(parts[1])
         month = int(parts[2])
         await _do_export(query.message, user_id, year, month)
+    elif data.startswith("edittx_"):
+        # Format: edittx_{year}_{month}_{page}
+        parts = data.split("_")
+        year = int(parts[1])
+        month = int(parts[2])
+        page = int(parts[3])
+
+        from utils.formatter import parse_iso_date, format_tanggal, BULAN
+        from handlers.report import MONTH_NAMES
+
+        per_page = 5
+        txs = get_month_transactions(user_id, year, month)
+        month_name = MONTH_NAMES.get(month, str(month))
+
+        if not txs:
+            await _safe_edit_or_reply(
+                query.message,
+                f"✏️ <b>Edit Transaksi — {month_name} {year}</b>\n\n"
+                f"<i>Belum ada transaksi.</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📅 Bulan Lain", callback_data="cmd_pilihbulan")],
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
+            return
+
+        total_pages = (len(txs) + per_page - 1) // per_page
+        page = min(page, total_pages - 1)
+        start = page * per_page
+        page_txs = txs[start:start + per_page]
+
+        buttons = []
+        for tx in page_txs:
+            emoji = "💰" if tx["type"] == "masuk" else "💸"
+            desc = tx.get("description", "")[:18]
+            amount = format_rupiah(tx["amount"])
+            dt = parse_iso_date(tx.get("created_at", ""))
+            date_str = format_tanggal(dt, short=True) if dt else ""
+            label = f"{emoji} {desc} — {amount} ({date_str})"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"edit_{tx['id']}")])
+
+        # Pagination buttons
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Sebelumnya", callback_data=f"edittx_{year}_{month}_{page - 1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Selanjutnya ➡️", callback_data=f"edittx_{year}_{month}_{page + 1}"))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(f"📅 Kembali ke {month_name}", callback_data=f"viewbulan_{year}_{month}"),
+            InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
+        ])
+
+        await _safe_edit_or_reply(
+            query.message,
+            f"✏️ <b>Edit Transaksi — {month_name} {year}</b>\n"
+            f"📝 {len(txs)} transaksi  •  Halaman {page + 1}/{total_pages}\n\n"
+            f"Pilih transaksi yang ingin diedit 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
     elif data.startswith("edit_"):
         # Tampilkan sub-menu pilihan field
         tx_id = int(data.split("_")[1])
@@ -484,36 +587,135 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
             )
     elif data.startswith("editfield_"):
-        # User memilih field → tampilkan instruksi
+        # User memilih field untuk diedit
         parts = data.split("_")
         tx_id = int(parts[1])
         field = parts[2]
 
-        field_info = {
-            "amount": ("💵 Nominal", "Ketik nominal baru", f"/edit {tx_id} amount 30k"),
-            "category": ("🗂️ Kategori", "Ketik kategori baru", f"/edit {tx_id} category Transportasi"),
-            "type": ("🔄 Tipe", "Ketik tipe baru (masuk/keluar)", f"/edit {tx_id} type keluar"),
-            "description": ("📝 Deskripsi", "Ketik deskripsi baru", f"/edit {tx_id} description grab ke kantor"),
+        if field == "type":
+            # Tampilkan tombol masuk/keluar langsung
+            await query.message.edit_text(
+                f"🔄 <b>Ubah Tipe</b> — Transaksi <code>#{tx_id}</code>\n\n"
+                f"Pilih tipe baru 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("💰 Masuk", callback_data=f"editset_{tx_id}_type_masuk"),
+                        InlineKeyboardButton("💸 Keluar", callback_data=f"editset_{tx_id}_type_keluar"),
+                    ],
+                    [
+                        InlineKeyboardButton("⬅️ Kembali", callback_data=f"edit_{tx_id}"),
+                    ],
+                ]),
+            )
+        elif field == "category":
+            # Tampilkan grid tombol kategori
+            categories = list(CATEGORY_KEYWORDS.keys()) + ["Lainnya"]
+            buttons = []
+            row = []
+            for cat in categories:
+                row.append(InlineKeyboardButton(cat, callback_data=f"editset_{tx_id}_category_{cat}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"edit_{tx_id}")])
+
+            await query.message.edit_text(
+                f"🗂️ <b>Ubah Kategori</b> — Transaksi <code>#{tx_id}</code>\n\n"
+                f"Pilih kategori baru 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        else:
+            # amount & description: simpan state, minta user ketik
+            context.user_data["edit_state"] = {"tx_id": tx_id, "field": field}
+
+            prompts = {
+                "amount": ("💵 Nominal", "Ketik nominal baru\n\n<i>Contoh: 30k, 50rb, 1.5jt</i>"),
+                "description": ("📝 Deskripsi", "Ketik deskripsi baru"),
+            }
+            label, hint = prompts.get(field, (field, "Ketik nilai baru"))
+
+            await query.message.edit_text(
+                f"✏️ <b>Edit {label}</b> — Transaksi <code>#{tx_id}</code>\n\n"
+                f"{hint}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Batal", callback_data=f"canceledit_{tx_id}")],
+                ]),
+            )
+    elif data.startswith("editset_"):
+        # Edit langsung via tombol (type & category)
+        parts = data.split("_", 3)
+        tx_id = int(parts[1])
+        field = parts[2]
+        value = parts[3]
+
+        tx = get_transaction_by_id(tx_id, user_id)
+        if not tx:
+            await query.message.edit_text(
+                f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
+            return
+
+        field_labels = {"type": "Tipe", "category": "Kategori"}
+        old_values = {
+            "type": "Pemasukan" if tx["type"] == "masuk" else "Pengeluaran",
+            "category": tx.get("category", "Lainnya"),
         }
+        old_display = old_values.get(field, "")
 
-        label, hint, example = field_info.get(field, (field, "", ""))
+        success = update_transaction(tx_id, user_id, **{field: value})
+        if success:
+            if field == "type":
+                new_display = "Pemasukan" if value == "masuk" else "Pengeluaran"
+            else:
+                new_display = value
 
-        await query.message.edit_text(
-            f"✏️ <b>Edit {label}</b> — Transaksi <code>#{tx_id}</code>\n\n"
-            f"{hint}. Kirim perintah berikut:\n\n"
-            f"<code>{example}</code>\n\n"
-            f"<i>💡 Salin perintah di atas, ubah nilainya, lalu kirim.</i>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⬅️ Kembali", callback_data=f"edit_{tx_id}"),
-                    InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
-                ],
-            ]),
-        )
+            await query.message.edit_text(
+                f"✅ <b>Transaksi Diperbarui</b>\n\n"
+                f"🔖 ID: <code>#{tx_id}</code>\n"
+                f"📝 {field_labels.get(field, field)}: {old_display} → <b>{new_display}</b>",
+                parse_mode="HTML",
+                reply_markup=after_tx_keyboard(tx_id),
+            )
+        else:
+            await query.message.edit_text(
+                "❌ Gagal memperbarui transaksi.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
+    elif data.startswith("canceledit_"):
+        # Batal edit → clear state, kembali ke transaksi
+        tx_id = int(data.split("_")[1])
+        context.user_data.pop("edit_state", None)
+        tx = get_transaction_by_id(tx_id, user_id)
+        if tx:
+            from utils.formatter import tx_confirmation_message
+            await query.message.edit_text(
+                tx_confirmation_message(tx),
+                parse_mode="HTML",
+                reply_markup=after_tx_keyboard(tx_id),
+            )
+        else:
+            await query.message.edit_text(
+                f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+                ]),
+            )
     elif data.startswith("back_"):
         # Kembali ke konfirmasi transaksi
         tx_id = int(data.split("_")[1])
+        context.user_data.pop("edit_state", None)
         tx = get_transaction_by_id(tx_id, user_id)
         if tx:
             from utils.formatter import tx_confirmation_message

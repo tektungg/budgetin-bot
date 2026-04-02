@@ -7,8 +7,8 @@ import re
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
-from services.parser import parse_transaction, format_rupiah
-from services.database import insert_transaction
+from services.parser import parse_transaction, parse_amount, format_rupiah
+from services.database import insert_transaction, update_transaction, get_transaction_by_id
 from services.gemini import analyze_receipt
 from utils.auth import require_auth
 from utils.formatter import tx_confirmation_message
@@ -18,11 +18,77 @@ from handlers.general import after_tx_keyboard
 logger = logging.getLogger(__name__)
 
 
+async def _handle_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_state: dict, text: str):
+    """Proses input teks saat user sedang dalam mode edit"""
+    user_id = update.effective_user.id
+    tx_id = edit_state["tx_id"]
+    field = edit_state["field"]
+
+    # Clear state langsung (one-shot)
+    context.user_data.pop("edit_state", None)
+
+    tx = get_transaction_by_id(tx_id, user_id)
+    if not tx:
+        await update.message.reply_text(
+            f"❌ Transaksi <code>#{tx_id}</code> tidak ditemukan.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
+        return
+
+    field_labels = {"amount": "Nominal", "description": "Deskripsi"}
+
+    if field == "amount":
+        value = parse_amount(text)
+        if not value:
+            await update.message.reply_text(
+                "⚠️ <b>Format nominal tidak valid</b>\n\n"
+                "Contoh: <code>30k</code>, <code>50rb</code>, <code>1.5jt</code>\n\n"
+                "<i>Silakan coba lagi dari tombol ✏️ Edit.</i>",
+                parse_mode="HTML",
+                reply_markup=after_tx_keyboard(tx_id),
+            )
+            return
+        old_display = format_rupiah(tx["amount"])
+        new_display = format_rupiah(value)
+    elif field == "description":
+        value = text
+        old_display = tx.get("description", "")
+        new_display = text
+    else:
+        return
+
+    success = update_transaction(tx_id, user_id, **{field: value})
+    if success:
+        await update.message.reply_text(
+            f"✅ <b>Transaksi Diperbarui</b>\n\n"
+            f"🔖 ID: <code>#{tx_id}</code>\n"
+            f"📝 {field_labels.get(field, field)}: {old_display} → <b>{new_display}</b>",
+            parse_mode="HTML",
+            reply_markup=after_tx_keyboard(tx_id),
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Gagal memperbarui transaksi.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+            ]),
+        )
+
+
 @require_auth
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle pesan teks natural dari user"""
     user_id = update.effective_user.id
     text = update.message.text.strip()
+
+    # Cek apakah user sedang dalam mode edit
+    edit_state = context.user_data.get("edit_state")
+    if edit_state:
+        await _handle_edit_input(update, context, edit_state, text)
+        return
 
     result = parse_transaction(text)
 

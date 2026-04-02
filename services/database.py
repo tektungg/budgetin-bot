@@ -181,6 +181,20 @@ def get_transaction_by_id(tx_id: int, user_id: int) -> dict | None:
     return result.data
 
 
+def get_recent_transactions(user_id: int, limit: int = 10) -> list[dict]:
+    """Ambil transaksi terbaru untuk user"""
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data
+
+
 def get_available_months(user_id: int) -> list[dict]:
     """Ambil daftar bulan & tahun yang memiliki transaksi (distinct year-month)"""
     client = get_client()

@@ -22,7 +22,7 @@ from handlers.report import (
     cmd_export,
     cmd_cari,
 )
-from handlers.general import cmd_start, cmd_help, cmd_status, cmd_hapus, cmd_edit, handle_callback
+from handlers.general import cmd_start, cmd_help, cmd_status, cmd_hapus, cmd_edit, cmd_batal, handle_callback
 from services.database import check_connection
 
 logging.basicConfig(
@@ -77,6 +77,7 @@ def main():
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("hapus", cmd_hapus))
     app.add_handler(CommandHandler("edit", cmd_edit))
+    app.add_handler(CommandHandler("batal", cmd_batal))
     app.add_handler(CommandHandler("cari", cmd_cari))
     app.add_handler(CommandHandler("status", cmd_status))
 
