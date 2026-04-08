@@ -538,6 +538,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_category_drilldown(query.message, user_id, year, month, tx_type, cat_name, page)
 
     elif data == "rcpt_ok":
+        context.user_data.pop("pending_receipt_title", None)
         items = context.user_data.pop("pending_receipt", [])
         if not items:
             await query.message.edit_text("❌ Gagal: Tidak ada data struk tersimpan.")
@@ -553,6 +554,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 category=tx_data["category"],
                 description=tx_data["description"],
                 source="photo",
+                created_at=tx_data.get("date"),
             )
             saved.append(tx)
             
@@ -578,6 +580,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     elif data == "rcpt_no":
         context.user_data.pop("pending_receipt", None)
+        context.user_data.pop("pending_receipt_title", None)
         await query.message.edit_text(
             "🚫 <b>Penyimpanan Struk Dibatalkan</b>",
             parse_mode="HTML",
@@ -598,20 +601,187 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             context.user_data["pending_receipt"] = items
             from handlers.transaction import _render_receipt_preview
-            msg, kb = _render_receipt_preview(items)
+            _title = context.user_data.get("pending_receipt_title")
+            msg, kb = _render_receipt_preview(items, title=_title) if _title else _render_receipt_preview(items)
             await query.message.edit_text(msg, parse_mode="HTML", reply_markup=kb)
     elif data.startswith("rcpt_edit_"):
         idx = int(data.split("_")[-1])
         items = context.user_data.get("pending_receipt", [])
         if idx < len(items):
-            context.user_data["receipt_edit_index"] = idx
             item = items[idx]
+            from utils.formatter import format_tanggal, parse_iso_date
+            dt = parse_iso_date(item["date"]) if item.get("date") and isinstance(item["date"], str) else item.get("date")
+            date_display = format_tanggal(dt, short=True) if dt else "Hari ini"
+            emoji = "💸" if item["type"] == "keluar" else "💰"
             await query.message.edit_text(
                 f"✏️ <b>Edit Item {idx+1}</b>\n\n"
-                f"Saat ini: {item['description']} — {format_rupiah(item['amount'])} ({item['category']})\n\n"
-                "Balas pesan ini dengan nominal dan deskripsi baru, misalnya: <code>25000 Makan Siang</code>",
-                parse_mode="HTML"
+                f"{emoji} {item['description']}\n"
+                f"{format_rupiah(item['amount'])} • {item['category']} • {date_display}\n\n"
+                "Pilih field yang ingin diubah 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("💵 Nominal", callback_data=f"rcpt_editfield_{idx}_amount"),
+                        InlineKeyboardButton("🔄 Tipe", callback_data=f"rcpt_editfield_{idx}_type"),
+                    ],
+                    [
+                        InlineKeyboardButton("🗂️ Kategori", callback_data=f"rcpt_editfield_{idx}_category"),
+                        InlineKeyboardButton("📝 Deskripsi", callback_data=f"rcpt_editfield_{idx}_description"),
+                    ],
+                    [
+                        InlineKeyboardButton("📅 Tanggal", callback_data=f"rcpt_editfield_{idx}_date"),
+                    ],
+                    [
+                        InlineKeyboardButton("⬅️ Kembali", callback_data="rcpt_back_preview"),
+                    ],
+                ]),
             )
+    elif data.startswith("rcpt_editfield_"):
+        parts = data.split("_", 3)  # ["rcpt", "editfield", "{idx}", "{field}"]
+        idx = int(parts[2])
+        field = parts[3]
+        items = context.user_data.get("pending_receipt", [])
+        if idx >= len(items):
+            return
+        item = items[idx]
+
+        if field == "type":
+            await query.message.edit_text(
+                f"🔄 <b>Ubah Tipe — Item {idx+1}</b>\n\n"
+                f"Saat ini: <b>{'Keluar' if item['type'] == 'keluar' else 'Masuk'}</b>\n\n"
+                "Pilih tipe baru 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("💰 Masuk", callback_data=f"rcpt_editset_{idx}_type_masuk"),
+                        InlineKeyboardButton("💸 Keluar", callback_data=f"rcpt_editset_{idx}_type_keluar"),
+                    ],
+                    [InlineKeyboardButton("⬅️ Kembali", callback_data=f"rcpt_edit_{idx}")],
+                ]),
+            )
+        elif field == "category":
+            from services.parser import CATEGORY_KEYWORDS
+            categories = list(CATEGORY_KEYWORDS.keys()) + ["Lainnya"]
+            buttons = []
+            row = []
+            for cat in categories:
+                row.append(InlineKeyboardButton(cat, callback_data=f"rcpt_editset_{idx}_category_{cat}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"rcpt_edit_{idx}")])
+            await query.message.edit_text(
+                f"🗂️ <b>Ubah Kategori — Item {idx+1}</b>\n\n"
+                f"Saat ini: <b>{item['category']}</b>\n\nPilih kategori baru 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        elif field == "date":
+            # Tampilkan pilihan bulan (mirip tgl_{tx_id})
+            WIB = timezone(timedelta(hours=7))
+            now = datetime.now(WIB)
+            from utils.formatter import BULAN
+            buttons = []
+            row = []
+            for i in range(6):
+                m = now.month - i
+                y = now.year
+                while m <= 0:
+                    m += 12
+                    y -= 1
+                label = f"{BULAN.get(m, '')} {y}"
+                row.append(InlineKeyboardButton(label, callback_data=f"rcpt_tglbulan_{idx}_{y}_{m}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            buttons.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"rcpt_edit_{idx}")])
+            await query.message.edit_text(
+                f"📅 <b>Ubah Tanggal — Item {idx+1}</b>\n\nPilih bulan 👇",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        else:
+            # amount / description → minta user ketik
+            context.user_data["receipt_edit_index"] = idx
+            context.user_data["receipt_edit_field"] = field
+            prompts = {
+                "amount": ("💵 Nominal", "Ketik nominal baru\n\n<i>Contoh: 30k, 50rb, 1.5jt</i>"),
+                "description": ("📝 Deskripsi", "Ketik deskripsi baru"),
+            }
+            label, hint = prompts.get(field, (field, "Ketik nilai baru"))
+            await query.message.edit_text(
+                f"✏️ <b>Edit {label} — Item {idx+1}</b>\n\n{hint}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Batal", callback_data=f"rcpt_edit_{idx}")],
+                ]),
+            )
+    elif data.startswith("rcpt_tglbulan_"):
+        parts = data.split("_")
+        idx = int(parts[2])
+        year = int(parts[3])
+        month = int(parts[4])
+        import calendar
+        _, days_in_month = calendar.monthrange(year, month)
+        from utils.formatter import BULAN
+        month_name = BULAN.get(month, str(month))
+        buttons = []
+        row = []
+        for day in range(1, days_in_month + 1):
+            row.append(InlineKeyboardButton(str(day), callback_data=f"rcpt_tglset_{idx}_{year}_{month}_{day}"))
+            if len(row) == 7:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        buttons.append([
+            InlineKeyboardButton("⬅️ Pilih Bulan", callback_data=f"rcpt_editfield_{idx}_date"),
+            InlineKeyboardButton("❌ Batal", callback_data=f"rcpt_edit_{idx}"),
+        ])
+        await query.message.edit_text(
+            f"📅 <b>Pilih Tanggal — {month_name} {year}</b>\n\nKetuk tanggal yang diinginkan 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+    elif data.startswith("rcpt_tglset_"):
+        parts = data.split("_")
+        idx = int(parts[2])
+        year = int(parts[3])
+        month = int(parts[4])
+        day = int(parts[5])
+        items = context.user_data.get("pending_receipt", [])
+        if idx < len(items):
+            from datetime import date as _date
+            items[idx]["date"] = _date(year, month, day).strftime("%Y-%m-%d")
+            context.user_data["pending_receipt"] = items
+            from handlers.transaction import _render_receipt_preview
+            _title = context.user_data.get("pending_receipt_title")
+            msg, kb = _render_receipt_preview(items, title=_title) if _title else _render_receipt_preview(items)
+            await query.message.edit_text(msg, parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("rcpt_editset_"):
+        parts = data.split("_", 4)  # ["rcpt", "editset", "{idx}", "{field}", "{value}"]
+        idx = int(parts[2])
+        field = parts[3]
+        value = parts[4]
+        items = context.user_data.get("pending_receipt", [])
+        if idx < len(items):
+            items[idx][field] = value
+            context.user_data["pending_receipt"] = items
+            from handlers.transaction import _render_receipt_preview
+            _title = context.user_data.get("pending_receipt_title")
+            msg, kb = _render_receipt_preview(items, title=_title) if _title else _render_receipt_preview(items)
+            await query.message.edit_text(msg, parse_mode="HTML", reply_markup=kb)
+    elif data == "rcpt_back_preview":
+        items = context.user_data.get("pending_receipt", [])
+        if items:
+            from handlers.transaction import _render_receipt_preview
+            _title = context.user_data.get("pending_receipt_title")
+            msg, kb = _render_receipt_preview(items, title=_title) if _title else _render_receipt_preview(items)
+            await query.message.edit_text(msg, parse_mode="HTML", reply_markup=kb)
 
     elif data == "cmd_export":
         await _send_export(query.message, user_id, edit=True)
