@@ -246,8 +246,8 @@ def get_available_months(user_id: int) -> list[dict]:
     return months
 
 
-def search_transactions(user_id: int, keyword: str, limit: int = 20) -> list[dict]:
-    """Cari transaksi berdasarkan keyword di description atau category"""
+def search_transactions(user_id: int, keyword: str, limit: int = 50) -> list[dict]:
+    """Cari transaksi berdasarkan keyword di description atau category (semua waktu)"""
     client = get_client()
     result = (
         client.table("transactions")
@@ -257,6 +257,25 @@ def search_transactions(user_id: int, keyword: str, limit: int = 20) -> list[dic
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .limit(limit)
+        .execute()
+    )
+    return result.data
+
+
+def search_transactions_month(user_id: int, keyword: str, year: int, month: int) -> list[dict]:
+    """Cari transaksi berdasarkan keyword dalam bulan tertentu"""
+    start = datetime(year, month, 1, tzinfo=WIB)
+    end = datetime(year + 1, 1, 1, tzinfo=WIB) if month == 12 else datetime(year, month + 1, 1, tzinfo=WIB)
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .select("*")
+        .eq("user_id", user_id)
+        .or_(f"description.ilike.%{keyword}%,category.ilike.%{keyword}%")
+        .gte("created_at", start.isoformat())
+        .lt("created_at", end.isoformat())
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
         .execute()
     )
     return result.data

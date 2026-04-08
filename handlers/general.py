@@ -33,7 +33,17 @@ def main_menu_keyboard():
             InlineKeyboardButton("📤 Export", callback_data="cmd_export"),
         ],
         [
+            InlineKeyboardButton("🔍 Cari", callback_data="cmd_cari_global"),
             InlineKeyboardButton("❓ Bantuan", callback_data="cmd_help"),
+        ],
+    ])
+
+
+def help_keyboard():
+    """Keyboard di halaman bantuan — hanya tombol kembali ke menu utama"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
         ],
     ])
 
@@ -111,6 +121,9 @@ def report_keyboard(year: int = None, month: int = None, page: int = 0, total_pa
             InlineKeyboardButton("✏️ Edit Transaksi", callback_data=f"edittx_{y}_{m}_0"),
         ],
         [
+            InlineKeyboardButton("🔍 Cari di Bulan Ini", callback_data=f"cmd_cari_month_{y}_{m}"),
+        ],
+        [
             InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
         ],
     ])
@@ -163,12 +176,16 @@ HELP_TEXT = """
 
 <b>✏️ EDIT & HAPUS</b>
 <i>Klik tombol ✏️ Edit setelah catat transaksi,
-lalu pilih field yang ingin diubah.</i>
+lalu pilih field yang ingin diubah:</i>
 ┌ 💵 Nominal — ketik nilai baru
 ├ 🗂️ Kategori — pilih dari daftar
 ├ 🔄 Tipe — pilih masuk/keluar
 ├ 📝 Deskripsi — ketik teks baru
 └ 📅 Tanggal — pilih tanggal lain
+
+<i>Atau gunakan perintah:</i>
+┌ <code>/hapus 42</code> — hapus transaksi #42
+└ <code>/batal</code> — batalkan proses edit
 
 <b>📊 LAPORAN</b>
 ┌ /hariini — transaksi hari ini
@@ -181,6 +198,9 @@ lalu pilih field yang ingin diubah.</i>
 <b>🔍 PENCARIAN</b>
 ┌ <code>/cari makan</code> — cari di deskripsi
 └ <code>/cari Transportasi</code> — cari di kategori
+
+<b>⚙️ LAINNYA</b>
+└ /status — cek status & uptime bot
 """
 
 
@@ -215,7 +235,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         HELP_TEXT,
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=help_keyboard(),
     )
 
 
@@ -252,7 +272,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         text,
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=help_keyboard(),
     )
 
 
@@ -482,6 +502,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if data == "cmd_start":
+        context.user_data.pop("search_state", None)
         name = query.from_user.first_name or "User"
         await _safe_edit_or_reply(
             query.message,
@@ -489,12 +510,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=main_menu_keyboard(),
         )
+    elif data == "cmd_cari_global":
+        context.user_data["search_state"] = {"scope": "global"}
+        await _safe_edit_or_reply(
+            query.message,
+            "🔍 <b>Cari Transaksi</b>\n\nKetik kata kunci yang ingin dicari di seluruh transaksi 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Batal", callback_data="cmd_start")],
+            ]),
+        )
+    elif data.startswith("cmd_cari_month_"):
+        parts = data.split("_")
+        year, month = int(parts[3]), int(parts[4])
+        context.user_data["search_state"] = {"scope": "month", "year": year, "month": month}
+        from handlers.report import MONTH_NAMES as _MONTH_NAMES
+        month_name = _MONTH_NAMES.get(month, str(month))
+        await _safe_edit_or_reply(
+            query.message,
+            f"🔍 <b>Cari di {month_name} {year}</b>\n\nKetik kata kunci yang ingin dicari 👇",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Batal", callback_data=f"viewbulan_{year}_{month}")],
+            ]),
+        )
     elif data == "cmd_help":
         await _safe_edit_or_reply(
             query.message,
             HELP_TEXT,
             parse_mode="HTML",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=help_keyboard(),
         )
     elif data == "cmd_hariini":
         await _send_hari_ini(query.message, user_id, edit=True)
@@ -536,6 +581,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         page = int(parts[-1])
         from handlers.report import _send_category_drilldown
         await _send_category_drilldown(query.message, user_id, year, month, tx_type, cat_name, page)
+    elif data.startswith("srchg_"):
+        # srchg_{page}_{keyword}
+        _, page_str, keyword = data.split("_", 2)
+        from handlers.report import _send_search
+        await _send_search(query.message, user_id, keyword, page=int(page_str), edit=True)
+    elif data.startswith("srchm_"):
+        # srchm_{year}_{month}_{page}_{keyword}
+        _, year_str, month_str, page_str, keyword = data.split("_", 4)
+        from handlers.report import _send_search_month
+        await _send_search_month(query.message, user_id, keyword, int(year_str), int(month_str), page=int(page_str), edit=True)
 
     elif data == "rcpt_ok":
         context.user_data.pop("pending_receipt_title", None)

@@ -210,6 +210,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
+    # Cek apakah user sedang dalam mode pencarian
+    search_state = context.user_data.pop("search_state", None)
+    if search_state:
+        from handlers.report import _send_search, _send_search_month
+        if search_state["scope"] == "global":
+            await _send_search(update.message, user_id, text)
+        else:
+            await _send_search_month(
+                update.message, user_id, text,
+                search_state["year"], search_state["month"],
+            )
+        return
+
     # Cek apakah user sedang dalam mode edit
     edit_state = context.user_data.get("edit_state")
     if edit_state:

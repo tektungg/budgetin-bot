@@ -12,6 +12,7 @@ from services.database import (
     get_category_summary,
     get_available_months,
     search_transactions,
+    search_transactions_month,
 )
 from services.export import generate_excel, build_export_caption, MONTH_NAMES as EXPORT_MONTH_NAMES
 from services.parser import format_rupiah
@@ -433,8 +434,8 @@ async def cmd_cari(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_search(update.message, user_id, keyword)
 
 
-async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
-    """Logic pencarian transaksi — reusable dari command & callback"""
+async def _send_search(message, user_id: int, keyword: str, page: int = 0, edit: bool = False):
+    """Logic pencarian transaksi global — dengan pagination"""
     txs = search_transactions(user_id, keyword)
 
     if not txs:
@@ -453,31 +454,103 @@ async def _send_search(message, user_id: int, keyword: str, edit: bool = False):
         return
 
     total_masuk, total_keluar, saldo = _summary_stats(txs)
+    total_pages = max(1, (len(txs) + 9) // 10)
+    page = max(0, min(page, total_pages - 1))
+    paginated = txs[page * 10:(page + 1) * 10]
 
     lines = [
         f"🔍 <b>Hasil Pencarian</b>",
-        f"Keyword: <code>{keyword}</code>  •  {len(txs)} ditemukan\n",
+        f"Keyword: <code>{keyword}</code>  •  {len(txs)} ditemukan — Halaman {page+1}/{total_pages}\n",
         _build_summary_block(total_masuk, total_keluar, saldo),
         f"\n{'─' * 30}\n",
-        build_transaction_list(txs),
+        build_transaction_list(paginated),
     ]
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
-            InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
-        ],
-        [
-            InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start"),
-        ],
-    ])
+    buttons = []
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"srchg_{page-1}_{keyword}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"srchg_{page+1}_{keyword}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+        buttons.append(nav_row)
 
+    buttons.append([
+        InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
+        InlineKeyboardButton("📅 Bulan Ini", callback_data="cmd_bulanini"),
+    ])
+    buttons.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")])
+
+    keyboard = InlineKeyboardMarkup(buttons)
     text = "\n".join(lines)
     if edit:
         await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
     else:
         await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
+
+async def _send_search_month(message, user_id: int, keyword: str, year: int, month: int, page: int = 0, edit: bool = False):
+    """Pencarian transaksi dalam bulan tertentu — dengan pagination"""
+    txs = search_transactions_month(user_id, keyword, year, month)
+    month_name = MONTH_NAMES.get(month, str(month))
+
+    if not txs:
+        text = (
+            f"🔍 <b>Hasil Pencarian — {month_name} {year}</b>\n\n"
+            f"Keyword: <code>{keyword}</code>\n\n"
+            f"<i>Tidak ditemukan transaksi yang cocok.</i>"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Kembali", callback_data=f"viewbulan_{year}_{month}")],
+            [InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")],
+        ])
+        if edit:
+            await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
+        else:
+            await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    total_masuk, total_keluar, saldo = _summary_stats(txs)
+    total_pages = max(1, (len(txs) + 9) // 10)
+    page = max(0, min(page, total_pages - 1))
+    paginated = txs[page * 10:(page + 1) * 10]
+
+    lines = [
+        f"🔍 <b>Hasil Pencarian — {month_name} {year}</b>",
+        f"Keyword: <code>{keyword}</code>  •  {len(txs)} ditemukan — Halaman {page+1}/{total_pages}\n",
+        _build_summary_block(total_masuk, total_keluar, saldo),
+        f"\n{'─' * 30}\n",
+        build_transaction_list(paginated),
+    ]
+
+    buttons = []
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"srchm_{year}_{month}_{page-1}_{keyword}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"srchm_{year}_{month}_{page+1}_{keyword}"))
+        else:
+            nav_row.append(InlineKeyboardButton("➖", callback_data="noop"))
+        buttons.append(nav_row)
+
+    buttons.append([InlineKeyboardButton("⬅️ Kembali", callback_data=f"viewbulan_{year}_{month}")])
+    buttons.append([InlineKeyboardButton("🏠 Menu Utama", callback_data="cmd_start")])
+
+    keyboard = InlineKeyboardMarkup(buttons)
+    text = "\n".join(lines)
+    if edit:
+        await _safe_edit_or_reply(message, text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def _send_category_drilldown(
