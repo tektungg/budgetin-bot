@@ -67,7 +67,7 @@ def tx_confirmation_message(tx: dict) -> str:
         f"┌ 📌 {tx['description']}\n"
         f"├ 💵 {amount_str}\n"
         f"├ 🗂️ {tx.get('category', 'Lainnya')}\n"
-        f"└ 🔖 <code>#{tx['id']}</code>"
+        f"└ 🔖 <code>#{tx['user_tx_no']}</code>"
     )
 
 
@@ -104,7 +104,7 @@ def build_transaction_list(transactions: list[dict], limit: int = None) -> str:
         amount_str = format_rupiah(tx["amount"])
         raw_desc = tx.get("description", "")
         desc = raw_desc[:32] + "…" if len(raw_desc) > 35 else raw_desc
-        tx_id = tx.get("id", "")
+        tx_id = tx.get("user_tx_no", "")
 
         lines.append(f"  {emoji} {desc} — <b>{amount_str}</b>  <i>[#{tx_id}]</i>")
 

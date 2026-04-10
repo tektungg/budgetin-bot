@@ -8,7 +8,8 @@
       "Bash(.venv/bin/python -c \"from services.groq_ai import analyze_receipt; print\\('OK'\\)\")",
       "WebFetch(domain:console.groq.com)",
       "Bash(.venv/bin/pip install:*)",
-      "Bash(.venv/bin/python -c \"from services.groq_ai import analyze_receipt, _compress_image; print\\('OK'\\)\")"
+      "Bash(.venv/bin/python -c \"from services.groq_ai import analyze_receipt, _compress_image; print\\('OK'\\)\")",
+      "Bash(rtk ls:*)"
     ]
   }
 }

@@ -36,7 +36,7 @@ def check_connection():
     try:
         client = get_client()
         # Test query ringan untuk pastikan koneksi OK
-        client.table("transactions").select("id", count="exact").limit(1).execute()
+        client.table("transactions").select("user_tx_no", count="exact").limit(1).execute()
         logger.info("Supabase connection verified")
     except Exception as e:
         logger.error(f"Supabase connection failed: {e}")
@@ -128,13 +128,26 @@ def get_category_summary(
 
 
 def delete_transaction(tx_id: int, user_id: int) -> bool:
-    """Hapus transaksi (soft-delete) berdasarkan ID dan user_id"""
+    """Hapus transaksi (soft-delete) berdasarkan user_tx_no dan user_id"""
     client = get_client()
     now_iso = datetime.now(timezone.utc).isoformat()
     result = (
         client.table("transactions")
         .update({"deleted_at": now_iso})
-        .eq("id", tx_id)
+        .eq("user_tx_no", tx_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return len(result.data) > 0
+
+
+def hard_delete_transaction(tx_id: int, user_id: int) -> bool:
+    """Hapus permanen transaksi dari database"""
+    client = get_client()
+    result = (
+        client.table("transactions")
+        .delete()
+        .eq("user_tx_no", tx_id)
         .eq("user_id", user_id)
         .execute()
     )
@@ -142,12 +155,12 @@ def delete_transaction(tx_id: int, user_id: int) -> bool:
 
 
 def restore_transaction(tx_id: int, user_id: int) -> bool:
-    """Pulihkan transaksi yang di-soft-delete berdasarkan ID dan user_id"""
+    """Pulihkan transaksi yang di-soft-delete berdasarkan user_tx_no dan user_id"""
     client = get_client()
     result = (
         client.table("transactions")
         .update({"deleted_at": None})
-        .eq("id", tx_id)
+        .eq("user_tx_no", tx_id)
         .eq("user_id", user_id)
         .execute()
     )
@@ -165,7 +178,7 @@ def update_transaction(tx_id: int, user_id: int, **kwargs) -> bool:
     result = (
         client.table("transactions")
         .update(updates)
-        .eq("id", tx_id)
+        .eq("user_tx_no", tx_id)
         .eq("user_id", user_id)
         .execute()
     )
@@ -178,7 +191,7 @@ def update_transaction_date(tx_id: int, user_id: int, new_date: datetime) -> boo
     result = (
         client.table("transactions")
         .update({"created_at": new_date.isoformat()})
-        .eq("id", tx_id)
+        .eq("user_tx_no", tx_id)
         .eq("user_id", user_id)
         .execute()
     )
@@ -186,12 +199,12 @@ def update_transaction_date(tx_id: int, user_id: int, new_date: datetime) -> boo
 
 
 def get_transaction_by_id(tx_id: int, user_id: int) -> dict | None:
-    """Ambil satu transaksi berdasarkan ID"""
+    """Ambil satu transaksi berdasarkan user_tx_no"""
     client = get_client()
     result = (
         client.table("transactions")
         .select("*")
-        .eq("id", tx_id)
+        .eq("user_tx_no", tx_id)
         .eq("user_id", user_id)
         .is_("deleted_at", "null")
         .maybe_single()

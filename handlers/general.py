@@ -3,6 +3,7 @@ Handler umum: /start, /help, /hapus, /edit
 Dengan inline keyboard untuk navigasi interaktif.
 """
 
+import asyncio
 import logging
 import platform
 import time
@@ -491,6 +492,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = query.from_user.id
 
+    # Jika ada countdown undo aktif dan user melakukan aksi lain → stop UI update
+    # Hard delete tetap jalan di background via task yang sudah berjalan
+    if not data.startswith("undel_"):
+        active_tid = context.bot_data.get(f"active_undo_{user_id}")
+        if active_tid:
+            context.bot_data[f"undo_stop_{active_tid}"] = "nav"
+            context.bot_data.pop(f"active_undo_{user_id}", None)
+
     # Import di sini untuk hindari circular import
     from handlers.report import (
         _send_hari_ini,
@@ -618,7 +627,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 "📸 <b>Struk Berhasil Dicatat!</b>\n\n" + tx_confirmation_message(saved[0]),
                 parse_mode="HTML",
-                reply_markup=after_tx_keyboard(saved[0]["id"]),
+                reply_markup=after_tx_keyboard(saved[0]["user_tx_no"]),
             )
         else:
             total = sum(tx["amount"] for tx in saved)
@@ -886,7 +895,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dt = parse_iso_date(tx.get("created_at", ""))
             date_str = format_tanggal(dt, short=True) if dt else ""
             label = f"{emoji} {desc} — {amount} ({date_str})"
-            buttons.append([InlineKeyboardButton(label, callback_data=f"edit_{tx['id']}")])
+            buttons.append([InlineKeyboardButton(label, callback_data=f"edit_{tx['user_tx_no']}")])
 
         # Pagination buttons
         nav_row = []
@@ -1112,40 +1121,72 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]),
             )
     elif data.startswith("konfirmhapus_"):
-        # User sudah konfirmasi → (soft) hapus sekarang
         tx_id = int(data.split("_")[1])
         tx = get_transaction_by_id(tx_id, user_id)
         if tx:
             success = delete_transaction(tx_id, user_id)
             if success:
-                msg = await query.message.edit_text(
-                    f"🗑️ Transaksi <code>#{tx_id}</code> berhasil dihapus.\n\n"
-                    f"💸 {tx['description']} — {format_rupiah(tx['amount'])}",
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("↩️ Batal (Undo)", callback_data=f"undel_{tx_id}")],
+                COUNTDOWN = 10
+                stop_key = f"undo_stop_{tx_id}"
+                context.bot_data.pop(stop_key, None)
+                context.bot_data[f"active_undo_{user_id}"] = tx_id
+
+                def _undo_kb(secs: int) -> InlineKeyboardMarkup:
+                    return InlineKeyboardMarkup([
+                        [InlineKeyboardButton(f"↩️ Undo ({secs}s)", callback_data=f"undel_{tx_id}")],
                         [
-                            InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
+                            InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
                             InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
                         ],
-                    ]),
+                    ])
+
+                msg = await query.message.edit_text(
+                    f"🗑️ Transaksi dihapus.\n\n"
+                    f"💸 {tx['description']} — {format_rupiah(tx['amount'])}",
+                    parse_mode="HTML",
+                    reply_markup=_undo_kb(COUNTDOWN),
                 )
-                
-                # Schedule removal of undo button after 30 seconds
-                async def remove_undo(context_arg: ContextTypes.DEFAULT_TYPE):
+
+                async def countdown_then_hard_delete():
+                    from services.database import hard_delete_transaction
+                    for secs in range(COUNTDOWN - 1, 0, -1):
+                        await asyncio.sleep(1)
+                        stop = context.bot_data.get(stop_key)
+                        if stop == "undo":
+                            return  # user undo → tidak hard delete
+                        if stop == "nav":
+                            # User navigasi → stop UI, lanjut hitung mundur silent
+                            remaining = secs
+                            await asyncio.sleep(remaining)
+                            if context.bot_data.get(stop_key) == "undo":
+                                return
+                            hard_delete_transaction(tx_id, user_id)
+                            context.bot_data.pop(stop_key, None)
+                            return
+                        try:
+                            await msg.edit_reply_markup(reply_markup=_undo_kb(secs))
+                        except Exception:
+                            pass
+                    await asyncio.sleep(1)
+                    if context.bot_data.get(stop_key) == "undo":
+                        return
+                    hard_delete_transaction(tx_id, user_id)
+                    context.bot_data.pop(stop_key, None)
+                    context.bot_data.pop(f"active_undo_{user_id}", None)
                     try:
-                        await msg.edit_reply_markup(
-                            reply_markup=InlineKeyboardMarkup([
-                                [
-                                    InlineKeyboardButton("📊 Lihat Hari Ini", callback_data="cmd_hariini"),
-                                    InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
-                                ],
-                            ])
+                        await msg.edit_text(
+                            f"🗑️ Transaksi dihapus permanen.\n\n"
+                            f"💸 {tx['description']} — {format_rupiah(tx['amount'])}",
+                            parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup([[
+                                InlineKeyboardButton("📊 Hari Ini", callback_data="cmd_hariini"),
+                                InlineKeyboardButton("🏠 Menu", callback_data="cmd_start"),
+                            ]]),
                         )
                     except Exception:
                         pass
-                
-                context.job_queue.run_once(remove_undo, 30.0)
+
+                asyncio.create_task(countdown_then_hard_delete())
             else:
                 await query.message.edit_text(
                     "❌ Gagal menghapus transaksi.",
@@ -1163,14 +1204,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     elif data.startswith("undel_"):
         tx_id = int(data.split("_")[1])
-        # Restore transaction
         from services.database import restore_transaction
+        # Tandai undo ditekan → countdown task berhenti dan tidak hard delete
+        context.bot_data[f"undo_stop_{tx_id}"] = "undo"
+        context.bot_data.pop(f"active_undo_{user_id}", None)
         success = restore_transaction(tx_id, user_id)
         if success:
             tx = get_transaction_by_id(tx_id, user_id)
             from utils.formatter import tx_confirmation_message
             await query.message.edit_text(
-                tx_confirmation_message(tx),
+                "↩️ Transaksi dipulihkan.\n\n" + tx_confirmation_message(tx),
                 parse_mode="HTML",
                 reply_markup=after_tx_keyboard(tx_id)
             )

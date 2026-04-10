@@ -322,7 +322,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         msg,
         parse_mode="HTML",
-        reply_markup=after_tx_keyboard(tx["id"]),
+        reply_markup=after_tx_keyboard(tx["user_tx_no"]),
     )
 
 
