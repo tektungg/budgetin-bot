@@ -14,7 +14,7 @@ from services.groq_ai import analyze_receipt
 from utils.auth import require_auth
 from utils.formatter import tx_confirmation_message
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from handlers.general import after_tx_keyboard
+from handlers.keyboards import after_tx_keyboard
 
 logger = logging.getLogger(__name__)
 

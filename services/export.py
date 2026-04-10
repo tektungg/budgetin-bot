@@ -10,14 +10,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from services.parser import format_rupiah
+from utils.formatter import BULAN as MONTH_NAMES
 
 logger = logging.getLogger(__name__)
-
-MONTH_NAMES = {
-    1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
-    5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
-    9: "September", 10: "Oktober", 11: "November", 12: "Desember",
-}
 
 # ── Styles ──────────────────────────────────────────────
 

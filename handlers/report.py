@@ -17,16 +17,10 @@ from services.database import (
 from services.export import generate_excel, build_export_caption, MONTH_NAMES as EXPORT_MONTH_NAMES
 from services.parser import format_rupiah
 from utils.auth import require_auth
-from utils.formatter import build_transaction_list, format_tanggal, parse_iso_date
-from handlers.general import report_keyboard, _safe_edit_or_reply
+from utils.formatter import build_transaction_list, format_tanggal, parse_iso_date, BULAN as MONTH_NAMES
+from handlers.keyboards import report_keyboard, _safe_edit_or_reply
 
 logger = logging.getLogger(__name__)
-
-MONTH_NAMES = {
-    1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
-    5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
-    9: "September", 10: "Oktober", 11: "November", 12: "Desember",
-}
 
 
 def _summary_stats(transactions: list[dict]) -> tuple[int, int, int]:

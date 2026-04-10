@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
 from config.settings import settings
+from utils.date_utils import month_range_wib
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,19 @@ def insert_transaction(
     return result.data[0]
 
 
+def insert_transaction_from_dict(user_id: int, tx_data: dict, source: str = "text") -> dict:
+    """Insert transaksi dari dict hasil parsing. Wrapper dari insert_transaction."""
+    return insert_transaction(
+        user_id=user_id,
+        tx_type=tx_data["type"],
+        amount=tx_data["amount"],
+        category=tx_data["category"],
+        description=tx_data["description"],
+        source=source,
+        created_at=tx_data.get("date"),
+    )
+
+
 def get_today_transactions(user_id: int) -> list[dict]:
     """Ambil transaksi hari ini (timezone Asia/Jakarta) via RPC"""
     client = get_client()
@@ -90,12 +104,7 @@ def get_month_transactions(
     year = year or now.year
     month = month or now.month
 
-    # Hitung range tanggal awal & akhir bulan dalam WIB, convert ke UTC
-    start_of_month = datetime(year, month, 1, tzinfo=WIB)
-    if month == 12:
-        end_of_month = datetime(year + 1, 1, 1, tzinfo=WIB)
-    else:
-        end_of_month = datetime(year, month + 1, 1, tzinfo=WIB)
+    start_of_month, end_of_month = month_range_wib(year, month)
 
     client = get_client()
     result = (
@@ -280,8 +289,7 @@ def search_transactions(user_id: int, keyword: str, limit: int = 50) -> list[dic
 
 def search_transactions_month(user_id: int, keyword: str, year: int, month: int) -> list[dict]:
     """Cari transaksi berdasarkan keyword dalam bulan tertentu"""
-    start = datetime(year, month, 1, tzinfo=WIB)
-    end = datetime(year + 1, 1, 1, tzinfo=WIB) if month == 12 else datetime(year, month + 1, 1, tzinfo=WIB)
+    start, end = month_range_wib(year, month)
     client = get_client()
     result = (
         client.table("transactions")
@@ -305,11 +313,7 @@ def get_transactions_by_category(
     year = year or now.year
     month = month or now.month
 
-    start_of_month = datetime(year, month, 1, tzinfo=WIB)
-    if month == 12:
-        end_of_month = datetime(year + 1, 1, 1, tzinfo=WIB)
-    else:
-        end_of_month = datetime(year, month + 1, 1, tzinfo=WIB)
+    start_of_month, end_of_month = month_range_wib(year, month)
 
     client = get_client()
     result = (
