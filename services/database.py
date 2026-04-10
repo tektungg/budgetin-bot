@@ -63,7 +63,10 @@ def insert_transaction(
         "source": source,
     }
     if created_at:
-        data["created_at"] = created_at.isoformat()
+        if isinstance(created_at, str):
+            data["created_at"] = created_at
+        else:
+            data["created_at"] = created_at.isoformat()
     result = (
         client.table("transactions")
         .insert(data)

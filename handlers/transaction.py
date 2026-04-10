@@ -4,12 +4,13 @@ Dengan konfirmasi yang lebih rapi & inline keyboard.
 """
 
 import re
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.parser import parse_transaction, parse_amount, format_rupiah
 from services.database import insert_transaction, update_transaction, get_transaction_by_id
-from services.gemini import analyze_receipt, analyze_text_transactions
+from services.groq_ai import analyze_receipt
 from utils.auth import require_auth
 from utils.formatter import tx_confirmation_message
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -179,15 +180,31 @@ async def _handle_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 async def _handle_multiline_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """Handle pesan teks multi-baris: parse semua transaksi via Gemini lalu tampilkan preview."""
-    msg = await update.message.reply_text("🤖 Menganalisis transaksi... mohon tunggu sebentar.")
-    transactions = await analyze_text_transactions(text)
+    """Handle pesan teks multi-baris: parse setiap baris dengan parser lokal."""
+    from services.parser import parse_transaction
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    transactions = []
+    failed_lines = []
+
+    for line in lines:
+        result = parse_transaction(line)
+        if result:
+            # Konversi date (datetime) ke string ISO jika ada
+            if "date" in result and hasattr(result["date"], "isoformat"):
+                result["date"] = result["date"].isoformat()
+            transactions.append(result)
+        else:
+            failed_lines.append(line)
+
     if not transactions:
-        await msg.edit_text(
+        failed_preview = "\n".join(f"• <code>{l}</code>" for l in failed_lines[:5])
+        await update.message.reply_text(
             "❌ <b>Gagal mengurai transaksi.</b>\n\n"
             "Pastikan setiap baris mengandung:\n"
             "• Tipe: <code>keluar</code> / <code>masuk</code>\n"
             "• Nominal: <code>25k</code>, <code>1jt</code>, <code>50000</code>\n\n"
+            f"Baris tidak dikenali:\n{failed_preview}\n\n"
             "Atau kirim satu per satu.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
@@ -195,13 +212,14 @@ async def _handle_multiline_text(update: Update, context: ContextTypes.DEFAULT_T
             ])
         )
         return
+
     context.user_data["pending_receipt"] = transactions
-    context.user_data["pending_receipt_title"] = f"🤖 <b>Preview {len(transactions)} Transaksi</b>"
-    preview_text, kb = _render_receipt_preview(
-        transactions,
-        title=context.user_data["pending_receipt_title"]
-    )
-    await msg.edit_text(preview_text, parse_mode="HTML", reply_markup=kb)
+    title = f"📋 <b>Preview {len(transactions)} Transaksi</b>"
+    if failed_lines:
+        title += f"\n⚠️ {len(failed_lines)} baris tidak dikenali dan dilewati."
+    context.user_data["pending_receipt_title"] = title
+    preview_text, kb = _render_receipt_preview(transactions, title=title)
+    await update.message.reply_text(preview_text, parse_mode="HTML", reply_markup=kb)
 
 
 @require_auth
@@ -310,20 +328,44 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_auth
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle foto struk yang dikirim user"""
+    """Handle foto struk yang dikirim user (termasuk multiple foto/album)"""
     user_id = update.effective_user.id
+    message = update.message
+    media_group_id = message.media_group_id
 
-    await update.message.reply_text("🔍 Menganalisis struk... mohon tunggu sebentar.")
+    if media_group_id:
+        # Kumpulkan foto dari album yang sama
+        group_key = f"mg_{media_group_id}"
+        if group_key not in context.bot_data:
+            context.bot_data[group_key] = {
+                "photos": [],
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+                "user_id": user_id,
+                "processing": False,
+            }
+            # Jadwalkan pemrosesan setelah 1.5 detik (tunggu semua foto tiba)
+            asyncio.get_event_loop().call_later(
+                1.5,
+                lambda: asyncio.ensure_future(
+                    _process_media_group(context, group_key, message)
+                ),
+            )
 
-    # Ambil foto resolusi terbesar
-    photo = update.message.photo[-1]
+        if not context.bot_data[group_key]["processing"]:
+            context.bot_data[group_key]["photos"].append(message.photo[-1])
+        return
+
+    # Foto tunggal — proses langsung
+    await message.reply_text("🔍 Menganalisis struk... mohon tunggu sebentar.")
+    photo = message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     image_bytes = await file.download_as_bytearray()
 
     transactions = await analyze_receipt(bytes(image_bytes))
 
     if not transactions:
-        await update.message.reply_text(
+        await message.reply_text(
             "❌ <b>Gagal Membaca Struk</b>\n\n"
             "Pastikan:\n"
             "┌ 📷 Foto cukup terang dan jelas\n"
@@ -341,4 +383,58 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_receipt"] = transactions
     text, kb = _render_receipt_preview(transactions)
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+    await message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def _process_media_group(context: ContextTypes.DEFAULT_TYPE, group_key: str, first_message):
+    """Proses semua foto dari satu album setelah selesai terkumpul"""
+    group = context.bot_data.get(group_key)
+    if not group or group["processing"]:
+        return
+    group["processing"] = True
+
+    photos = group["photos"]
+    user_id = group["user_id"]
+    chat_id = group["chat_id"]
+
+    status_msg = await context.bot.send_message(
+        chat_id,
+        f"🔍 Menganalisis {len(photos)} struk... mohon tunggu sebentar.",
+    )
+
+    all_transactions = []
+    failed = 0
+    for photo in photos:
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            image_bytes = await file.download_as_bytearray()
+            txs = await analyze_receipt(bytes(image_bytes))
+            if txs:
+                all_transactions.extend(txs)
+            else:
+                failed += 1
+        except Exception as e:
+            logger.error(f"Error analyzing photo in media group: {e}")
+            failed += 1
+
+    # Bersihkan data group
+    context.bot_data.pop(group_key, None)
+
+    if not all_transactions:
+        await status_msg.edit_text(
+            "❌ <b>Gagal Membaca Semua Struk</b>\n\n"
+            "Pastikan foto cukup terang, jelas, dan struk terlihat seluruhnya.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Mutate inner dict langsung — MappingProxyType tidak bisa di-assign tapi value-nya bisa di-update
+    context.application.user_data[user_id]["pending_receipt"] = all_transactions
+
+    note = f"\n⚠️ {failed} foto gagal dibaca." if failed else ""
+    text, kb = _render_receipt_preview(all_transactions)
+    await status_msg.edit_text(
+        text + note,
+        parse_mode="HTML",
+        reply_markup=kb,
+    )

@@ -4,7 +4,11 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('handlers/general.py'\\).read\\(\\)\\); ast.parse\\(open\\('handlers/report.py'\\).read\\(\\)\\); ast.parse\\(open\\('services/database.py'\\).read\\(\\)\\); print\\('All files OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('handlers/general.py'\\).read\\(\\)\\); ast.parse\\(open\\('handlers/report.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['handlers/general.py', 'handlers/report.py', 'handlers/transaction.py', 'utils/formatter.py']]; print\\('All OK'\\)\")",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(.venv/bin/python -c \"from services.groq_ai import analyze_receipt; print\\('OK'\\)\")",
+      "WebFetch(domain:console.groq.com)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/python -c \"from services.groq_ai import analyze_receipt, _compress_image; print\\('OK'\\)\")"
     ]
   }
 }

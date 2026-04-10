@@ -19,7 +19,7 @@ else:
 @dataclass
 class Settings:
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
     # Supabase
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
